@@ -22,7 +22,7 @@ function App() {
             <FileText className="text-white" size={32} />
           </div>
           <div>
-            <h1 className="text-3xl font-black tracking-tight mb-0">AntiGravity <span className="text-indigo-400">Invoice</span></h1>
+            <h1 className="text-3xl font-black tracking-tight mb-0">AI <span className="text-indigo-400">Invoice_Automation</span></h1>
             <p className="text-sm text-gray-400 flex items-center gap-1">
               <Sparkles size={14} className="text-amber-400" /> AI-Powered Expense Automation
             </p>
@@ -60,7 +60,7 @@ function App() {
 
       <footer className="mt-20 py-8 border-t border-white/5 text-center">
         <p className="text-gray-500 text-xs">
-          &copy; 2026 AntiGravity AI. Built with React, Flask & MongoDB.
+          &copy; 2026 AI Invoice-Automation. Built with React, Flask & MongoDB.
         </p>
       </footer>
 

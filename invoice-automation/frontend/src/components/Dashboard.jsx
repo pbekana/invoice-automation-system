@@ -173,7 +173,7 @@ const StatCard = ({ icon, title, value, subtitle, delay }) => (
     <div className="p-3 bg-white/5 rounded-xl border border-white/10">{icon}</div>
     <div>
       <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">{title}</p>
-      <h3 className="text-2xl font-bold bg-none -webkit-text-fill-color-initial !bg-clip-initial m-0" style={{ webkitTextFillColor: 'white' }}>{value}</h3>
+      <h3 className="text-2xl font-bold bg-none -WebkitTextFillColor-initial !bg-clip-initial m-0" style={{ webkitTextFillColor: 'white' }}>{value}</h3>
       <p className="text-xs text-gray-500">{subtitle}</p>
     </div>
   </motion.div>

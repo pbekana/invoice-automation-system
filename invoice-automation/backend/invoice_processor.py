@@ -69,7 +69,7 @@ class InvoiceProcessor:
         for line in lines:
             if len(line) > 2 and not re.match(r'^[\d\s\.\-\/]+$', line):
                 cleaned = str(re.sub(r'[^\w\s&\.-]', '', line)).strip()
-                return cleaned[:100]
+                return cleaned[:100]  # type: ignore
         return "Unknown Company"
 
     def _extract_date(self, text):

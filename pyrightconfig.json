@@ -1,0 +1,15 @@
+{
+  "extraPaths": [
+    "/home/peter/LintMintData/Python/invoice-automation/backend",
+    "/home/peter/LintMintData/Python/invoice-automation/backend/venv/lib/python3.12/site-packages"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "/home/peter/LintMintData/Python/invoice-automation/backend",
+      "extraPaths": [
+        "/home/peter/LintMintData/Python/invoice-automation/backend",
+        "/home/peter/LintMintData/Python/invoice-automation/backend/venv/lib/python3.12/site-packages"
+      ]
+    }
+  ]
+}

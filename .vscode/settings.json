@@ -1,0 +1,6 @@
+{
+  "python.analysis.extraPaths": [
+    "./invoice-automation/backend"
+  ],
+  "python.defaultInterpreterPath": "./invoice-automation/backend/venv/bin/python"
+}
