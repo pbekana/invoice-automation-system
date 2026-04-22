@@ -26,6 +26,7 @@ class Config:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     DPI = 300
     OCR_PSM = 6
+    MODEL_PATH = os.path.join(BASE_DIR, "invoice_model.joblib")
 
 # Ensure upload directory exists
 if not os.path.exists(Config.UPLOAD_FOLDER):
