@@ -27,8 +27,25 @@ class DatabaseManager:
     def _ensure_indexes(self):
         """Create indexes for performance."""
         if self.db is not None:
+            # Invoice indexes
             self.db[Config.INVOICES_COLLECTION].create_index([("category", ASCENDING)])
             self.db[Config.INVOICES_COLLECTION].create_index([("date", ASCENDING)])
+            self.db[Config.INVOICES_COLLECTION].create_index([("status", ASCENDING)])
+            self.db[Config.INVOICES_COLLECTION].create_index([("submitter_id", ASCENDING)])
+            
+            # User indexes
+            self.db[Config.USERS_COLLECTION].create_index([("email", ASCENDING)], unique=True)
+            self.db[Config.USERS_COLLECTION].create_index([("status", ASCENDING)])
+            
+            # Vendor indexes
+            self.db[Config.VENDORS_COLLECTION].create_index([("normalized_name", ASCENDING)])
+            self.db[Config.VENDORS_COLLECTION].create_index([("status", ASCENDING)])
+            
+            # Audit log indexes
+            self.db[Config.AUDIT_LOG_COLLECTION].create_index([("entity_id", ASCENDING)])
+            self.db[Config.AUDIT_LOG_COLLECTION].create_index([("user_id", ASCENDING)])
+            self.db[Config.AUDIT_LOG_COLLECTION].create_index([("timestamp", ASCENDING)])
+            
             logger.info("Database indexes ensured.")
 
     @staticmethod

@@ -1,5 +1,6 @@
 flask==3.1.0
 flask-cors==5.0.1
+flask-limiter==3.5.0
 pymongo==4.11.3
 pytesseract==0.3.13
 opencv-python-headless==4.11.0.86
@@ -14,4 +15,10 @@ joblib==1.4.2
 python-dateutil==2.9.0
 pytest==8.3.3
 pytest-mock==3.14.0
+pytest-cov==4.1.0
 python-json-logger==2.0.7
+pyjwt==2.8.0
+bcrypt==4.1.2
+email-validator==2.1.0
+redis==5.0.1
+requests==2.31.0

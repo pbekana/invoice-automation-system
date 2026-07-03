@@ -15,6 +15,16 @@ class Config:
     MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
     DB_NAME = os.getenv("DB_NAME", "invoice_db")
     INVOICES_COLLECTION = "invoices"
+    USERS_COLLECTION = "users"
+    VENDORS_COLLECTION = "vendors"
+    AUDIT_LOG_COLLECTION = "audit_logs"
+    NOTIFICATIONS_COLLECTION = "notifications"
+    APPROVAL_RULES_COLLECTION = "approval_rules"
+    
+    # Authentication settings
+    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
+    JWT_ACCESS_TOKEN_EXPIRES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES", 3600))  # 1 hour
+    JWT_REFRESH_TOKEN_EXPIRES = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRES", 2592000))  # 30 days
     
     # File handling
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +37,28 @@ class Config:
     DPI = 300
     OCR_PSM = 6
     MODEL_PATH = os.path.join(BASE_DIR, "invoice_model.joblib")
+    
+    # Security settings
+    BCRYPT_LOG_ROUNDS = 12
+    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+    
+    # Rate limiting settings
+    RATELIMIT_ENABLED = os.getenv("RATELIMIT_ENABLED", "true").lower() == "true"
+    RATELIMIT_STORAGE_URL = os.getenv("RATELIMIT_STORAGE_URL", "memory://")  # Use "redis://localhost:6379" for Redis
+    RATELIMIT_STRATEGY = "fixed-window"
+    
+    # Notification settings
+    SMTP_HOST = os.getenv("SMTP_HOST")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+    SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+    SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", os.getenv("SMTP_USERNAME", "noreply@invoiceapp.com"))
+    SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+    NOTIFICATIONS_ENABLED = os.getenv("NOTIFICATIONS_ENABLED", "false").lower() == "true"
+    
+    # Approval rules settings
+    APPROVAL_ESCALATION_DAYS = int(os.getenv("APPROVAL_ESCALATION_DAYS", 3))
+    AUTO_APPROVAL_ENABLED = os.getenv("AUTO_APPROVAL_ENABLED", "false").lower() == "true"
 
 # Ensure upload directory exists
 if not os.path.exists(Config.UPLOAD_FOLDER):
