@@ -9,7 +9,7 @@ class Config:
     
     # Flask settings
     PORT = int(os.getenv("PORT", 5000))
-    DEBUG = os.getenv("FLASK_DEBUG", "true").lower() == "true"
+    DEBUG = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     
     # MongoDB settings
     MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
@@ -20,9 +20,16 @@ class Config:
     AUDIT_LOG_COLLECTION = "audit_logs"
     NOTIFICATIONS_COLLECTION = "notifications"
     APPROVAL_RULES_COLLECTION = "approval_rules"
+    CUSTOMERS_COLLECTION = "customers"
+    PRODUCTS_COLLECTION = "products"
+    COMPANIES_COLLECTION = "companies"
     
     # Authentication settings
-    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
+    _jwt_secret = os.getenv("JWT_SECRET_KEY")
+    if not _jwt_secret and not os.getenv("FLASK_DEBUG", "false").lower() == "true":
+        raise RuntimeError("JWT_SECRET_KEY must be set in production!")
+    import secrets
+    JWT_SECRET_KEY = _jwt_secret or secrets.token_hex(32)
     JWT_ACCESS_TOKEN_EXPIRES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES", 3600))  # 1 hour
     JWT_REFRESH_TOKEN_EXPIRES = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRES", 2592000))  # 30 days
     

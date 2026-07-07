@@ -182,7 +182,7 @@ class InvoiceProcessor:
         
         # Method 1: Look for keywords and the number following them
         for kw in keywords:
-            pattern = re.escape(kw) + r'[:\s]*[\$€£]?\s*(\d+[\.,]\d{2})'
+            pattern = r'\b' + re.escape(kw) + r'[:\s]*[\$€£]?\s*(\d+[\.,]\d{2})'
             match = re.search(pattern, text_lower)
             if match:
                 try: 

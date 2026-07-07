@@ -59,7 +59,7 @@ class AuthService:
         department: Optional[str] = None
     ) -> Tuple[bool, Optional[User], Optional[str]]:
         """Register a new user."""
-        if not self.users_collection:
+        if self.users_collection is None:
             return False, None, "Database not available"
         
         # Validate email
@@ -100,7 +100,7 @@ class AuthService:
     
     def authenticate(self, email: str, password: str) -> Tuple[bool, Optional[User], Optional[str]]:
         """Authenticate user with email and password."""
-        if not self.users_collection:
+        if self.users_collection is None:
             return False, None, "Database not available"
         
         try:
@@ -196,7 +196,7 @@ class AuthService:
     
     def get_user_by_id(self, user_id: str) -> Optional[User]:
         """Get user by ID."""
-        if not self.users_collection:
+        if self.users_collection is None:
             return None
         
         try:
@@ -233,7 +233,7 @@ class AuthService:
         new_password: str
     ) -> Tuple[bool, Optional[str]]:
         """Change user password."""
-        if not self.users_collection:
+        if self.users_collection is None:
             return False, "Database not available"
         
         try:

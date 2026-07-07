@@ -69,9 +69,9 @@ class DatabaseManager:
         if self.db is None:
             return None
         try:
-            # Ensure total is in cents before saving
+            # Store total as float
             if "total" in invoice_data:
-                invoice_data["total"] = self.to_cents(invoice_data["total"])
+                invoice_data["total"] = float(f"{invoice_data['total']:.2f}")
             
             result = self.db[Config.INVOICES_COLLECTION].insert_one(invoice_data)
             return str(result.inserted_id)
@@ -92,7 +92,7 @@ class DatabaseManager:
             for inv in invoices:
                 inv["_id"] = str(inv["_id"])
                 if "total" in inv:
-                    inv["total"] = self.from_cents(inv["total"])
+                    inv["total"] = float(f"{inv['total']:.2f}")
 
             return invoices
 
@@ -101,7 +101,7 @@ class DatabaseManager:
             return []
 
     def get_dashboard_summary(self):
-        """Aggregate dashboard stats with cents-to-float conversion."""
+        """Aggregate dashboard stats."""
         if self.db is None:
             return self._empty_summary()
         try:
@@ -109,13 +109,13 @@ class DatabaseManager:
             cat_pipeline = [{
                 "$group": {
                     "_id": "$category",
-                    "total_cents": {"$sum": {"$ifNull": ["$total", 0]}},
+                    "total_amount": {"$sum": {"$ifNull": ["$total", 0]}},
                     "count": {"$sum": 1}
                 }
             }]
             categories = {
                 item["_id"]: {
-                    "total": self.from_cents(item["total_cents"]),
+                    "total": float(f"{item['total_amount']:.2f}"),
                     "count": item["count"]
                 }
                 for item in collection.aggregate(cat_pipeline) if item["_id"]

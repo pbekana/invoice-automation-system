@@ -49,33 +49,3 @@ def init_rate_limiter(app):
     logger.info(f"Rate limiter initialized with storage: {storage_uri}")
     return limiter
 
-
-# Common rate limit decorators
-def rate_limit_strict(func):
-    """Strict rate limit: 10 requests per minute."""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if limiter:
-            limiter.limit("10 per minute")(func)(*args, **kwargs)
-        return func(*args, **kwargs)
-    return wrapper
-
-
-def rate_limit_moderate(func):
-    """Moderate rate limit: 30 requests per minute."""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if limiter:
-            limiter.limit("30 per minute")(func)(*args, **kwargs)
-        return func(*args, **kwargs)
-    return wrapper
-
-
-def rate_limit_relaxed(func):
-    """Relaxed rate limit: 100 requests per minute."""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if limiter:
-            limiter.limit("100 per minute")(func)(*args, **kwargs)
-        return func(*args, **kwargs)
-    return wrapper

@@ -161,7 +161,7 @@ class SequenceManager:
         Returns:
             Next sequence number
         """
-        if not self.sequences_collection:
+        if self.sequences_collection is None:
             return initial_value
         
         try:
@@ -191,7 +191,7 @@ class SequenceManager:
         Returns:
             Current sequence number
         """
-        if not self.sequences_collection:
+        if self.sequences_collection is None:
             return 0
         
         try:
@@ -215,7 +215,7 @@ class SequenceManager:
         Returns:
             True if successful
         """
-        if not self.sequences_collection:
+        if self.sequences_collection is None:
             return False
         
         try:

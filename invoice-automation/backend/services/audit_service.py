@@ -51,7 +51,7 @@ class AuditService:
         ip_address: Optional[str] = None
     ) -> bool:
         """Log an audit event."""
-        if not self.audit_collection:
+        if self.audit_collection is None:
             logger.warning("Audit collection not available")
             return False
         
@@ -134,7 +134,7 @@ class AuditService:
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         """Get audit history for a specific entity."""
-        if not self.audit_collection:
+        if self.audit_collection is None:
             return []
         
         try:
@@ -158,7 +158,7 @@ class AuditService:
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         """Get activity log for a specific user."""
-        if not self.audit_collection:
+        if self.audit_collection is None:
             return []
         
         try:
@@ -187,7 +187,7 @@ class AuditService:
         limit: int = 50
     ) -> List[Dict[str, Any]]:
         """Get recent system activity."""
-        if not self.audit_collection:
+        if self.audit_collection is None:
             return []
         
         try:
@@ -215,7 +215,7 @@ class AuditService:
         skip: int = 0
     ) -> List[Dict[str, Any]]:
         """Search audit log with multiple filters."""
-        if not self.audit_collection:
+        if self.audit_collection is None:
             return []
         
         try:

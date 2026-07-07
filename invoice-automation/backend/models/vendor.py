@@ -108,6 +108,8 @@ class Vendor:
     def normalize_name(name: str) -> str:
         """Normalize vendor name for deduplication."""
         import re
+        # Remove .com domain suffix
+        name = re.sub(r'\.com\b', '', name, flags=re.IGNORECASE)
         # Remove common suffixes
         name = re.sub(r'\b(Inc|LLC|Ltd|Corp|Corporation|Limited|Co)\b\.?', '', name, flags=re.IGNORECASE)
         # Remove punctuation and extra spaces

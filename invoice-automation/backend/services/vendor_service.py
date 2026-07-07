@@ -27,7 +27,7 @@ class VendorService:
         notes: Optional[str] = None
     ) -> Tuple[bool, Optional[Vendor], Optional[str]]:
         """Create a new vendor."""
-        if not self.vendors_collection:
+        if self.vendors_collection is None:
             return False, None, "Database not available"
         
         if not name or not name.strip():
@@ -67,7 +67,7 @@ class VendorService:
     
     def get_vendor_by_id(self, vendor_id: str) -> Optional[Vendor]:
         """Get vendor by ID."""
-        if not self.vendors_collection:
+        if self.vendors_collection is None:
             return None
         
         try:
@@ -82,7 +82,7 @@ class VendorService:
     
     def find_vendor_by_name(self, name: str, fuzzy: bool = True) -> Optional[Vendor]:
         """Find vendor by name (exact or fuzzy match)."""
-        if not self.vendors_collection or not name:
+        if self.vendors_collection is None or not name:
             return None
         
         try:
@@ -137,7 +137,7 @@ class VendorService:
         updates: Dict[str, Any]
     ) -> Tuple[bool, Optional[str]]:
         """Update vendor information."""
-        if not self.vendors_collection:
+        if self.vendors_collection is None:
             return False, "Database not available"
         
         try:
@@ -178,7 +178,7 @@ class VendorService:
         skip: int = 0
     ) -> List[Vendor]:
         """List vendors with optional filtering."""
-        if not self.vendors_collection:
+        if self.vendors_collection is None:
             return []
         
         try:
@@ -203,7 +203,7 @@ class VendorService:
     
     def count_vendors(self, status: Optional[str] = None) -> int:
         """Count vendors."""
-        if not self.vendors_collection:
+        if self.vendors_collection is None:
             return 0
         
         try:

@@ -13,7 +13,7 @@ def create_admin():
     print("=" * 50)
     print()
     
-    if not db_manager.db:
+    if db_manager.db is None:
         print("❌ Error: Could not connect to database")
         print(f"   Make sure MongoDB is running at: {db_manager.uri}")
         sys.exit(1)

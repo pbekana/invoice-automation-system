@@ -3,6 +3,7 @@ import uuid
 from flask import Flask, request, jsonify, g  # type: ignore
 from flask_cors import CORS  # type: ignore
 from werkzeug.utils import secure_filename  # type: ignore
+from bson import ObjectId  # type: ignore
 
 from config import Config  # type: ignore
 from db import db_manager  # type: ignore
@@ -58,6 +59,23 @@ invoice_module.invoice_service = invoice_service
 audit_module.audit_service = audit_service
 notification_module.notification_service = notification_service
 approval_rules_module.approval_rules_service = approval_rules_service
+
+# Initialize Phase 5 services (Customer, Product, Company)
+from services.customer_service import CustomerService  # type: ignore
+from services.product_service import ProductService  # type: ignore
+from services.company_service import CompanyService  # type: ignore
+
+customer_service = CustomerService(db_manager.db)
+product_service = ProductService(db_manager.db)
+company_service = CompanyService(db_manager.db)
+
+import services.customer_service as customer_module
+import services.product_service as product_module
+import services.company_service as company_module
+
+customer_module.customer_service = customer_service
+product_module.product_service = product_service
+company_module.company_service = company_service
 
 # Initialize rate limiting (Phase 4)
 from middleware.rate_limit import init_rate_limiter
@@ -644,7 +662,7 @@ def submit_invoice_for_approval(invoice_id):
         
         # Phase 4: Send notifications to approvers
         if Config.NOTIFICATIONS_ENABLED and approvers:
-            submitter = db_manager.db.users.find_one({'_id': user_id})
+            submitter = db_manager.db.users.find_one({'_id': ObjectId(user_id)})
             notification_service.notify_invoice_submitted(
                 invoice_dict,
                 submitter,
@@ -689,8 +707,8 @@ def approve_invoice(invoice_id):
         if not invoice:
             return jsonify({"error": "Invoice not found"}), 404
         
-        approver = db_manager.db.users.find_one({'_id': user_id})
-        submitter = db_manager.db.users.find_one({'_id': invoice.submitter_id}) if invoice.submitter_id else None
+        approver = db_manager.db.users.find_one({'_id': ObjectId(user_id)})
+        submitter = db_manager.db.users.find_one({'_id': ObjectId(invoice.submitter_id)}) if invoice.submitter_id else None
         
         # Approve invoice
         success, error = invoice_service.approve_invoice(invoice_id, user_id, comments)
@@ -746,8 +764,8 @@ def reject_invoice(invoice_id):
         if not invoice:
             return jsonify({"error": "Invoice not found"}), 404
         
-        approver = db_manager.db.users.find_one({'_id': user_id})
-        submitter = db_manager.db.users.find_one({'_id': invoice.submitter_id}) if invoice.submitter_id else None
+        approver = db_manager.db.users.find_one({'_id': ObjectId(user_id)})
+        submitter = db_manager.db.users.find_one({'_id': ObjectId(invoice.submitter_id)}) if invoice.submitter_id else None
         
         # Reject invoice
         success, error = invoice_service.reject_invoice(invoice_id, user_id, reason)
@@ -1005,19 +1023,63 @@ def get_dashboard():
 @app.route("/chat", methods=["POST"])
 @require_auth
 def chat():
-    """Simple chatbot for expense queries."""
+    """Smart chatbot for expense queries."""
     try:
         data = request.get_json()
         if not data or "message" not in data:
             return jsonify({"error": "Missing message body"}), 400
             
-        query = data.get("message", "").lower()
+        query = data.get("message", "")
         stats = db_manager.get_dashboard_summary()
         
-        if "total" in query or "spend" in query:
+        if Config.OPENAI_API_KEY:
+            try:
+                from openai import OpenAI
+                import json
+                client = OpenAI(api_key=Config.OPENAI_API_KEY)
+                
+                # Fetch recent invoices for context
+                recent_invoices = list(db_manager.db[Config.INVOICES_COLLECTION].find({}, {"_id": 0, "company": 1, "total": 1, "category": 1, "date": 1, "status": 1}).sort("date", -1).limit(50))
+                
+                system_prompt = f"""You are an intelligent financial assistant for an Invoice Automation system.
+You help users understand their spending, expense categories, and invoice history.
+
+Current Dashboard Stats:
+{json.dumps(stats, indent=2)}
+
+Recent Invoices Data (last 50):
+{json.dumps(recent_invoices, indent=2)}
+
+Instructions:
+1. Answer the user's question concisely based ONLY on the provided data.
+2. If asked about trends (e.g. "last month compared to this month"), try to calculate it from the Recent Invoices Data if the dates are available.
+3. Use markdown formatting for better readability (e.g., bold numbers, bullet points).
+4. Be helpful, professional, and friendly.
+5. If you do not have enough data to answer the query accurately, clearly state that you only have access to the dashboard summary and recent invoices.
+"""
+                
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": query}
+                    ],
+                    max_tokens=300,
+                    temperature=0.3
+                )
+                
+                bot_response = response.choices[0].message.content
+                return jsonify({"response": bot_response}), 200
+            except Exception as e:
+                logger.error(f"OpenAI chat failed: {e}")
+                # Fall back to basic logic below
+        
+        # Fallback basic logic
+        query_lower = query.lower()
+        if "total" in query_lower or "spend" in query_lower:
             response = f"📊 Total spend: **${stats['grand_total']:.2f}** ({stats['total_invoices']} invoices)."
         else:
-            response = "🤖 I can help with spend totals and category breakdowns!"
+            response = "🤖 I can help with spend totals and category breakdowns! (Configure an OPENAI_API_KEY for a smarter AI experience)"
 
         return jsonify({"response": response}), 200
     except Exception as e:
@@ -1345,10 +1407,443 @@ def health_check():
             "error": str(e)
         }), 503
 
+# ============================================================================
+# CUSTOMER ROUTES (Phase 5)
+# ============================================================================
+
+@app.route("/api/customers", methods=["POST"])
+@require_auth
+def create_customer():
+    """Create a new customer."""
+    try:
+        data = request.get_json()
+        if not data or not data.get("name"):
+            return jsonify({"error": "Customer name is required"}), 400
+
+        user_id = get_current_user_id()
+        success, customer, error = customer_service.create_customer(
+            name=data["name"],
+            user_id=user_id,
+            email=data.get("email"),
+            phone=data.get("phone"),
+            billing_address=data.get("billing_address"),
+            shipping_address=data.get("shipping_address"),
+            tax_id=data.get("tax_id"),
+            payment_terms=data.get("payment_terms"),
+            currency=data.get("currency", "USD"),
+            notes=data.get("notes"),
+        )
+        if not success:
+            return jsonify({"error": error}), 400
+        return jsonify({"message": "Customer created", "customer": customer.to_json()}), 201
+    except Exception as e:
+        logger.error(f"Create customer error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to create customer"}), 500
+
+
+@app.route("/api/customers", methods=["GET"])
+@require_auth
+def list_customers():
+    """List all customers."""
+    try:
+        search = request.args.get("search")
+        status = request.args.get("status")
+        limit = int(request.args.get("limit", 100))
+        skip = int(request.args.get("skip", 0))
+        customers = customer_service.list_customers(status=status, search=search, limit=limit, skip=skip)
+        return jsonify({
+            "customers": [c.to_json() for c in customers],
+            "total": customer_service.count_customers()
+        }), 200
+    except Exception as e:
+        logger.error(f"List customers error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to list customers"}), 500
+
+
+@app.route("/api/customers/<customer_id>", methods=["GET"])
+@require_auth
+def get_customer(customer_id):
+    """Get a single customer by ID."""
+    customer = customer_service.get_customer_by_id(customer_id)
+    if not customer:
+        return jsonify({"error": "Customer not found"}), 404
+    return jsonify({"customer": customer.to_json()}), 200
+
+
+@app.route("/api/customers/<customer_id>", methods=["PATCH"])
+@require_auth
+def update_customer(customer_id):
+    """Update a customer."""
+    try:
+        data = request.get_json() or {}
+        success, error = customer_service.update_customer(customer_id, data)
+        if not success:
+            return jsonify({"error": error}), 400
+        updated = customer_service.get_customer_by_id(customer_id)
+        return jsonify({"message": "Customer updated", "customer": updated.to_json() if updated else {}}), 200
+    except Exception as e:
+        logger.error(f"Update customer error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to update customer"}), 500
+
+
+@app.route("/api/customers/<customer_id>", methods=["DELETE"])
+@require_auth
+@require_roles([UserRole.ADMIN])
+def delete_customer(customer_id):
+    """Deactivate a customer (soft delete)."""
+    success, error = customer_service.delete_customer(customer_id)
+    if not success:
+        return jsonify({"error": error}), 400
+    return jsonify({"message": "Customer deactivated"}), 200
+
+
+# ============================================================================
+# PRODUCT ROUTES (Phase 5)
+# ============================================================================
+
+@app.route("/api/products", methods=["POST"])
+@require_auth
+def create_product():
+    """Create a new product or service."""
+    try:
+        data = request.get_json()
+        if not data or not data.get("name"):
+            return jsonify({"error": "Product name is required"}), 400
+
+        user_id = get_current_user_id()
+        success, product, error = product_service.create_product(
+            name=data["name"],
+            user_id=user_id,
+            sku=data.get("sku"),
+            description=data.get("description"),
+            unit_price=float(data.get("unit_price", 0.0)),
+            tax_rate=float(data.get("tax_rate", 0.0)),
+            category=data.get("category"),
+        )
+        if not success:
+            return jsonify({"error": error}), 400
+        return jsonify({"message": "Product created", "product": product.to_json()}), 201
+    except Exception as e:
+        logger.error(f"Create product error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to create product"}), 500
+
+
+@app.route("/api/products", methods=["GET"])
+@require_auth
+def list_products():
+    """List all products and services."""
+    try:
+        search = request.args.get("search")
+        active_only = request.args.get("active_only", "true").lower() == "true"
+        limit = int(request.args.get("limit", 200))
+        products = product_service.list_products(search=search, active_only=active_only, limit=limit)
+        return jsonify({
+            "products": [p.to_json() for p in products],
+            "total": product_service.count_products()
+        }), 200
+    except Exception as e:
+        logger.error(f"List products error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to list products"}), 500
+
+
+@app.route("/api/products/<product_id>", methods=["GET"])
+@require_auth
+def get_product(product_id):
+    product = product_service.get_product_by_id(product_id)
+    if not product:
+        return jsonify({"error": "Product not found"}), 404
+    return jsonify({"product": product.to_json()}), 200
+
+
+@app.route("/api/products/<product_id>", methods=["PATCH"])
+@require_auth
+def update_product(product_id):
+    try:
+        data = request.get_json() or {}
+        success, error = product_service.update_product(product_id, data)
+        if not success:
+            return jsonify({"error": error}), 400
+        updated = product_service.get_product_by_id(product_id)
+        return jsonify({"message": "Product updated", "product": updated.to_json() if updated else {}}), 200
+    except Exception as e:
+        logger.error(f"Update product error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to update product"}), 500
+
+
+@app.route("/api/products/<product_id>", methods=["DELETE"])
+@require_auth
+@require_roles([UserRole.ADMIN])
+def delete_product(product_id):
+    success, error = product_service.delete_product(product_id)
+    if not success:
+        return jsonify({"error": error}), 400
+    return jsonify({"message": "Product deactivated"}), 200
+
+
+# ============================================================================
+# COMPANY PROFILE ROUTES (Phase 5)
+# ============================================================================
+
+@app.route("/api/company", methods=["GET"])
+@require_auth
+def get_company():
+    """Get the company profile for the current user."""
+    user_id = get_current_user_id()
+    company = company_service.get_company(user_id)
+    if not company:
+        return jsonify({"company": None}), 200
+    return jsonify({"company": company.to_json()}), 200
+
+
+@app.route("/api/company", methods=["POST", "PUT"])
+@require_auth
+def upsert_company():
+    """Create or update the company profile for the current user."""
+    try:
+        data = request.get_json() or {}
+        user_id = get_current_user_id()
+        success, company, error = company_service.upsert_company(user_id, data)
+        if not success:
+            return jsonify({"error": error}), 400
+        return jsonify({"message": "Company profile saved", "company": company.to_json()}), 200
+    except Exception as e:
+        logger.error(f"Upsert company error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to save company profile"}), 500
+
+
+# ============================================================================
+# AR INVOICE ROUTES (Phase 5 — Accounts Receivable)
+# ============================================================================
+
+@app.route("/api/ar/invoices", methods=["POST"])
+@require_auth
+def create_ar_invoice():
+    """Create a new outgoing (AR) invoice to a customer."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body required"}), 400
+
+        required = ["customer_id", "line_items"]
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
+
+        user_id = get_current_user_id()
+
+        # Validate customer exists
+        customer = customer_service.get_customer_by_id(data["customer_id"])
+        if not customer:
+            return jsonify({"error": "Customer not found"}), 404
+
+        # Calculate totals from line items
+        line_items = data.get("line_items", [])
+        subtotal = sum(
+            float(item.get("quantity", 1)) * float(item.get("unit_price", 0))
+            for item in line_items
+        )
+        tax_amount = sum(
+            float(item.get("quantity", 1)) * float(item.get("unit_price", 0)) * float(item.get("tax_rate", 0)) / 100
+            for item in line_items
+        )
+        discount = float(data.get("discount", 0))
+        total = round(subtotal + tax_amount - discount, 2)
+
+        # Generate invoice number
+        seq_manager = sequence_manager
+        inv_number = seq_manager.next_sequence("ar_invoice") if seq_manager else f"AR-{uuid.uuid4().hex[:8].upper()}"
+        prefix = data.get("invoice_prefix", "INV-")
+        invoice_number = f"{prefix}{inv_number}"
+
+        import datetime as dt
+        doc = {
+            "type": "receivable",
+            "invoice_number": invoice_number,
+            "customer_id": data["customer_id"],
+            "customer_name": customer.name,
+            "customer_email": customer.email,
+            "line_items": line_items,
+            "subtotal": round(subtotal, 2),
+            "tax_amount": round(tax_amount, 2),
+            "discount": discount,
+            "total": total,
+            "currency": data.get("currency", customer.currency or "USD"),
+            "status": data.get("status", "draft"),
+            "due_date": data.get("due_date"),
+            "issue_date": data.get("issue_date", dt.datetime.utcnow().strftime("%Y-%m-%d")),
+            "notes": data.get("notes", ""),
+            "terms": data.get("terms", ""),
+            "created_by": user_id,
+            "created_at": dt.datetime.utcnow(),
+            "updated_at": dt.datetime.utcnow(),
+        }
+
+        db = db_manager.db
+        result = db["ar_invoices"].insert_one(doc)
+        doc["_id"] = str(result.inserted_id)
+        doc["id"] = doc["_id"]
+        doc.pop("_id")
+        if "created_at" in doc:
+            doc["created_at"] = doc["created_at"].isoformat()
+        if "updated_at" in doc:
+            doc["updated_at"] = doc["updated_at"].isoformat()
+
+        logger.info(f"AR invoice created: {invoice_number} by user {user_id}")
+        return jsonify({"message": "Invoice created", "invoice": doc}), 201
+
+    except Exception as e:
+        logger.error(f"Create AR invoice error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to create invoice"}), 500
+
+
+@app.route("/api/ar/invoices", methods=["GET"])
+@require_auth
+def list_ar_invoices():
+    """List all AR invoices."""
+    try:
+        status = request.args.get("status")
+        search = request.args.get("search")
+        limit = int(request.args.get("limit", 50))
+        skip = int(request.args.get("skip", 0))
+
+        query: dict = {"type": "receivable"}
+        if status:
+            query["status"] = status
+        if search:
+            query["$or"] = [
+                {"invoice_number": {"$regex": search, "$options": "i"}},
+                {"customer_name": {"$regex": search, "$options": "i"}},
+            ]
+
+        db = db_manager.db
+        docs = list(db["ar_invoices"].find(query).sort("created_at", -1).skip(skip).limit(limit))
+        total = db["ar_invoices"].count_documents(query)
+
+        serialized = []
+        for d in docs:
+            d["id"] = str(d.pop("_id"))
+            for field in ["created_at", "updated_at"]:
+                if field in d and hasattr(d[field], "isoformat"):
+                    d[field] = d[field].isoformat()
+            serialized.append(d)
+
+        return jsonify({"invoices": serialized, "total": total}), 200
+    except Exception as e:
+        logger.error(f"List AR invoices error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to list invoices"}), 500
+
+
+@app.route("/api/ar/invoices/<invoice_id>", methods=["GET"])
+@require_auth
+def get_ar_invoice(invoice_id):
+    """Get a single AR invoice."""
+    try:
+        db = db_manager.db
+        doc = db["ar_invoices"].find_one({"_id": ObjectId(invoice_id)})
+        if not doc:
+            return jsonify({"error": "Invoice not found"}), 404
+        doc["id"] = str(doc.pop("_id"))
+        for field in ["created_at", "updated_at"]:
+            if field in doc and hasattr(doc[field], "isoformat"):
+                doc[field] = doc[field].isoformat()
+        return jsonify({"invoice": doc}), 200
+    except Exception as e:
+        logger.error(f"Get AR invoice error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to get invoice"}), 500
+
+
+@app.route("/api/ar/invoices/<invoice_id>", methods=["PATCH"])
+@require_auth
+def update_ar_invoice(invoice_id):
+    """Update an AR invoice (only draft invoices can be fully edited)."""
+    try:
+        import datetime as dt
+        data = request.get_json() or {}
+        db = db_manager.db
+        existing = db["ar_invoices"].find_one({"_id": ObjectId(invoice_id)})
+        if not existing:
+            return jsonify({"error": "Invoice not found"}), 404
+
+        # Recalculate totals if line_items are being updated
+        if "line_items" in data:
+            line_items = data["line_items"]
+            subtotal = sum(
+                float(item.get("quantity", 1)) * float(item.get("unit_price", 0))
+                for item in line_items
+            )
+            tax_amount = sum(
+                float(item.get("quantity", 1)) * float(item.get("unit_price", 0)) * float(item.get("tax_rate", 0)) / 100
+                for item in line_items
+            )
+            discount = float(data.get("discount", existing.get("discount", 0)))
+            data["subtotal"] = round(subtotal, 2)
+            data["tax_amount"] = round(tax_amount, 2)
+            data["discount"] = discount
+            data["total"] = round(subtotal + tax_amount - discount, 2)
+
+        protected = ["_id", "type", "created_at", "created_by", "invoice_number"]
+        for f in protected:
+            data.pop(f, None)
+        data["updated_at"] = dt.datetime.utcnow()
+
+        db["ar_invoices"].update_one({"_id": ObjectId(invoice_id)}, {"$set": data})
+        updated = db["ar_invoices"].find_one({"_id": ObjectId(invoice_id)})
+        updated["id"] = str(updated.pop("_id"))
+        for field in ["created_at", "updated_at"]:
+            if field in updated and hasattr(updated[field], "isoformat"):
+                updated[field] = updated[field].isoformat()
+        return jsonify({"message": "Invoice updated", "invoice": updated}), 200
+    except Exception as e:
+        logger.error(f"Update AR invoice error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to update invoice"}), 500
+
+
+@app.route("/api/ar/invoices/<invoice_id>/send", methods=["POST"])
+@require_auth
+def send_ar_invoice(invoice_id):
+    """Mark an AR invoice as 'sent'."""
+    try:
+        import datetime as dt
+        db = db_manager.db
+        result = db["ar_invoices"].update_one(
+            {"_id": ObjectId(invoice_id)},
+            {"$set": {"status": "sent", "sent_at": dt.datetime.utcnow(), "updated_at": dt.datetime.utcnow()}}
+        )
+        if result.matched_count == 0:
+            return jsonify({"error": "Invoice not found"}), 404
+        return jsonify({"message": "Invoice marked as sent"}), 200
+    except Exception as e:
+        logger.error(f"Send AR invoice error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to send invoice"}), 500
+
+
+@app.route("/api/ar/invoices/<invoice_id>/paid", methods=["POST"])
+@require_auth
+def mark_ar_invoice_paid(invoice_id):
+    """Mark an AR invoice as paid."""
+    try:
+        import datetime as dt
+        data = request.get_json() or {}
+        db = db_manager.db
+        result = db["ar_invoices"].update_one(
+            {"_id": ObjectId(invoice_id)},
+            {"$set": {
+                "status": "paid",
+                "paid_at": dt.datetime.utcnow(),
+                "payment_method": data.get("payment_method", ""),
+                "payment_reference": data.get("payment_reference", ""),
+                "updated_at": dt.datetime.utcnow()
+            }}
+        )
+        if result.matched_count == 0:
+            return jsonify({"error": "Invoice not found"}), 404
+        return jsonify({"message": "Invoice marked as paid"}), 200
+    except Exception as e:
+        logger.error(f"Mark AR paid error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to mark as paid"}), 500
+
+
 # Start Flask app
 if __name__ == "__main__":
     logger.info(f"Starting server on port {Config.PORT}...")
-    app.run(host="0.0.0.0", port=Config.PORT, debug=Config.DEBUG)
-
-
     app.run(host="0.0.0.0", port=Config.PORT, debug=Config.DEBUG)

@@ -27,7 +27,9 @@ def log_response(response):
         duration = time.time() - g.get('start_time', time.time())
         
         # Get user info if authenticated
-        user_id = g.get('user_id', 'anonymous')
+        user_id = 'anonymous'
+        if hasattr(g, 'current_user') and g.current_user:
+            user_id = str(g.current_user._id)
         
         # Get client IP
         client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)

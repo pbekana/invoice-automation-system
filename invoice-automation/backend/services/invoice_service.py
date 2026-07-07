@@ -30,7 +30,7 @@ class InvoiceService:
         notes: Optional[str] = None
     ) -> Tuple[bool, Optional[Invoice], Optional[str]]:
         """Create a new invoice."""
-        if not self.invoices_collection:
+        if self.invoices_collection is None:
             return False, None, "Database not available"
         
         try:
@@ -61,7 +61,7 @@ class InvoiceService:
     
     def get_invoice_by_id(self, invoice_id: str) -> Optional[Invoice]:
         """Get invoice by ID."""
-        if not self.invoices_collection:
+        if self.invoices_collection is None:
             return None
         
         try:
@@ -81,7 +81,7 @@ class InvoiceService:
         user_id: str
     ) -> Tuple[bool, Optional[str]]:
         """Update invoice fields."""
-        if not self.invoices_collection:
+        if self.invoices_collection is None:
             return False, "Database not available"
         
         try:
@@ -127,7 +127,7 @@ class InvoiceService:
         comments: Optional[str] = None
     ) -> Tuple[bool, Optional[str]]:
         """Change invoice status (with validation)."""
-        if not self.invoices_collection:
+        if self.invoices_collection is None:
             return False, "Database not available"
         
         try:
@@ -192,7 +192,7 @@ class InvoiceService:
         comments: Optional[str] = None
     ) -> Tuple[bool, Optional[str]]:
         """Approve an invoice."""
-        if not self.invoices_collection:
+        if self.invoices_collection is None:
             return False, "Database not available"
         
         invoice = self.get_invoice_by_id(invoice_id)
@@ -277,7 +277,7 @@ class InvoiceService:
         user_roles: Optional[List[str]] = None
     ) -> List[Invoice]:
         """List invoices with filtering."""
-        if not self.invoices_collection:
+        if self.invoices_collection is None:
             return []
         
         try:
@@ -317,7 +317,7 @@ class InvoiceService:
     
     def count_invoices(self, query: Optional[Dict[str, Any]] = None) -> int:
         """Count invoices matching query."""
-        if not self.invoices_collection:
+        if self.invoices_collection is None:
             return 0
         
         try:
@@ -340,7 +340,7 @@ class InvoiceService:
         date: str
     ) -> Optional[Invoice]:
         """Check for potential duplicate invoices."""
-        if not self.invoices_collection or not invoice_number:
+        if self.invoices_collection is None or not invoice_number:
             return None
         
         try:

@@ -1,163 +1,5 @@
-// import React, { useState, useRef } from 'react';
-// import { Upload, File, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
-// import { uploadInvoice } from '../services/api';
-// import { motion, AnimatePresence } from 'framer-motion';
-
-// const UploadInvoice = ({ onUploadSuccess }) => {
-//   const [isDragging, setIsDragging] = useState(false);
-//   const [file, setFile] = useState(null);
-//   const [status, setStatus] = useState('idle'); // idle, uploading, success, error
-//   const [message, setMessage] = useState('');
-//   const [extractedData, setExtractedData] = useState(null);
-//   const fileInputRef = useRef(null);
-
-//   const handleDragOver = (e) => {
-//     e.preventDefault();
-//     setIsDragging(true);
-//   };
-
-//   const handleDragLeave = () => {
-//     setIsDragging(false);
-//   };
-
-//   const handleDrop = (e) => {
-//     e.preventDefault();
-//     setIsDragging(false);
-//     const droppedFile = e.dataTransfer.files[0];
-//     if (droppedFile) processFile(droppedFile);
-//   };
-
-//   const handleFileChange = (e) => {
-//     const selectedFile = e.target.files[0];
-//     if (selectedFile) processFile(selectedFile);
-//   };
-
-//   const processFile = async (selectedFile) => {
-//     setFile(selectedFile);
-//     setStatus('uploading');
-//     setMessage('Processing your invoice with AI...');
-
-//     try {
-//       const result = await uploadInvoice(selectedFile);
-//       setStatus('success');
-//       setMessage('Invoice processed successfully!');
-//       setExtractedData(result.invoice);
-      
-//       if (onUploadSuccess) {
-//         onUploadSuccess(result.invoice);
-//       }
-//     } catch (err) {
-//       console.error(err);
-//       setStatus('error');
-//       setMessage(err.response?.data?.error || 'Failed to upload invoice. Please try again.');
-//     }
-//   };
-
-//   const reset = () => {
-//     setFile(null);
-//     setStatus('idle');
-//     setMessage('');
-//     setExtractedData(null);
-//     if (fileInputRef.current) fileInputRef.current.value = '';
-//   };
-
-//   return (
-//     <motion.div 
-//       initial={{ opacity: 0, y: 20 }}
-//       animate={{ opacity: 1, y: 0 }}
-//       className="glass-card fade-in"
-//     >
-//       <h2 className="text-xl font-bold mb-4">Upload Invoice</h2>
-//       <p className="text-sm text-gray-400 mb-6">
-//         Upload your PDF or image invoices. Our AI will automatically extract data and categorize your expenses.
-//       </p>
-
-//       {status === 'idle' ? (
-//         <div
-//           className={`upload-zone ${isDragging ? 'dragging' : ''}`}
-//           onDragOver={handleDragOver}
-//           onDragLeave={handleDragLeave}
-//           onDrop={handleDrop}
-//           onClick={() => fileInputRef.current?.click()}
-//         >
-//           <input
-//             type="file"
-//             ref={fileInputRef}
-//             onChange={handleFileChange}
-//             className="hidden"
-//             accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.webp"
-//           />
-//           <Upload className="mx-auto mb-4 text-indigo-400" size={48} />
-//           <p className="font-semibold">Click to upload or drag and drop</p>
-//           <p className="text-xs text-gray-400 mt-2">Support: PDF, PNG, JPG, WebP (Max 16MB)</p>
-//         </div>
-//       ) : (
-//         <div className="py-8 text-center">
-//           <AnimatePresence mode="wait">
-//             {status === 'uploading' && (
-//               <motion.div 
-//                 key="uploading"
-//                 initial={{ opacity: 0 }}
-//                 animate={{ opacity: 1 }}
-//                 exit={{ opacity: 0 }}
-//               >
-//                 <Loader2 className="mx-auto mb-4 text-indigo-400 animate-spin" size={48} />
-//                 <p className="font-semibold text-indigo-400">{message}</p>
-//               </motion.div>
-//             )}
-
-//             {status === 'success' && (
-//               <motion.div 
-//                 key="success"
-//                 initial={{ opacity: 0, scale: 0.9 }}
-//                 animate={{ opacity: 1, scale: 1 }}
-//                 className="space-y-4"
-//               >
-//                 <CheckCircle className="mx-auto text-emerald-400" size={48} />
-//                 <p className="font-semibold text-emerald-400">{message}</p>
-                
-//                 {extractedData && (
-//                   <div className="bg-slate-800/50 p-4 rounded-lg text-left max-w-sm mx-auto border border-emerald-500/20">
-//                     <div className="grid grid-cols-2 gap-2 text-sm">
-//                       <span className="text-gray-400">Company:</span>
-//                       <span className="font-medium">{extractedData.company}</span>
-//                       <span className="text-gray-400">Total:</span>
-//                       <span className="font-medium text-emerald-300 font-mono">${extractedData.total.toFixed(2)}</span>
-//                       <span className="text-gray-400">Category:</span>
-//                       <span className="font-medium italic">{extractedData.category}</span>
-//                     </div>
-//                   </div>
-//                 )}
-                
-//                 <button onClick={reset} className="btn btn-primary btn-sm">
-//                   Upload Another
-//                 </button>
-//               </motion.div>
-//             )}
-
-//             {status === 'error' && (
-//               <motion.div 
-//                 key="error"
-//                 initial={{ opacity: 0, scale: 0.9 }}
-//                 animate={{ opacity: 1, scale: 1 }}
-//               >
-//                 <AlertCircle className="mx-auto mb-4 text-rose-400" size={48} />
-//                 <p className="font-semibold text-rose-400">{message}</p>
-//                 <button onClick={reset} className="btn btn-primary btn-sm mt-4">
-//                   Try Again
-//                 </button>
-//               </motion.div>
-//             )}
-//           </AnimatePresence>
-//         </div>
-//       )}
-//     </motion.div>
-//   );
-// };
-
-// export default UploadInvoice;
 import React, { useState, useRef } from 'react';
-import { Upload, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import { uploadInvoice } from '../services/api';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -194,26 +36,26 @@ const UploadInvoice = ({ onUploadSuccess }) => {
   };
 
   const processFile = async (selectedFile) => {
-    if (!selectedFile || isProcessingRef.current) return; // ✅ prevent double upload
+    if (!selectedFile || isProcessingRef.current) return;
     isProcessingRef.current = true;
 
     setFile(selectedFile);
     setStatus('uploading');
-    setMessage('Processing your invoice with AI...');
+    setMessage('OCR scanning & AI extraction in progress...');
 
     try {
       const result = await uploadInvoice(selectedFile);
       setStatus('success');
-      setMessage('Invoice processed successfully!');
+      setMessage('Invoice ingested and categorized!');
       setExtractedData(result.invoice);
 
       if (onUploadSuccess) onUploadSuccess(result.invoice);
     } catch (err) {
       console.error(err);
       setStatus('error');
-      setMessage(err.response?.data?.error || 'Failed to upload invoice. Please try again.');
+      setMessage(err.response?.data?.error || 'Failed to process document. Make sure it is a valid invoice file.');
     } finally {
-      isProcessingRef.current = false; // allow new uploads
+      isProcessingRef.current = false;
     }
   };
 
@@ -222,77 +64,107 @@ const UploadInvoice = ({ onUploadSuccess }) => {
     setStatus('idle');
     setMessage('');
     setExtractedData(null);
-    if (fileInputRef.current) fileInputRef.current.value = ''; // ✅ reset input
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card fade-in">
-      <h2 className="text-xl font-bold mb-4">Upload Invoice</h2>
-      <p className="text-sm text-gray-400 mb-6">
-        Upload your PDF or image invoices. Our AI will automatically extract data and categorize your expenses.
-      </p>
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-md font-bold text-slate-800 dark:text-white">Upload Vendor Bill</h3>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+          Upload PDF or image files. The AI engine will parse items, totals, and categorize the vendor.
+        </p>
+      </div>
 
       {status === 'idle' ? (
-       <label
-  className={`border-2 border-dashed border-gray-600 rounded-xl p-8 text-center w-full ${isDragging ? 'border-indigo-400' : ''}`}
-  onDragOver={handleDragOver}
-  onDragLeave={handleDragLeave}
-  onDrop={handleDrop}
-  style={{ cursor: 'pointer' }}
->
-  <input
-    type="file"
-    ref={fileInputRef}
-    onChange={handleFileChange}
-    className="hidden"
-    accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.webp"
-  />
+        <label
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`border-2 border-dashed rounded-xl p-8 text-center flex flex-col items-center justify-center cursor-pointer transition-all duration-200 ${
+            isDragging 
+              ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20' 
+              : 'border-slate-300 dark:border-slate-700 hover:border-blue-500 hover:bg-slate-50 dark:hover:bg-slate-900/50'
+          }`}
+        >
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            className="hidden"
+            accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.webp"
+          />
 
-  <Upload className="mx-auto mb-4 text-indigo-400" size={48} />
-  <p className="font-semibold">Click to upload or drag and drop</p>
-  <p className="text-xs text-gray-400 mt-2">
-    Support: PDF, PNG, JPG, WebP (Max 16MB)
-  </p>
-</label>
+          <div className="p-3 bg-blue-50 dark:bg-slate-800 rounded-full text-blue-600 dark:text-blue-400 mb-3 border border-blue-100 dark:border-slate-800">
+            <Upload size={24} />
+          </div>
+          <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+            Click to upload or drag and drop
+          </p>
+          <p className="text-[10px] text-slate-400 mt-1.5">
+            Supports PDF, PNG, JPG, WebP up to 16MB
+          </p>
+        </label>
       ) : (
-        <div className="py-8 text-center">
+        <div className="py-6 text-center border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-900/20 p-6">
           <AnimatePresence mode="wait">
             {status === 'uploading' && (
-              <motion.div key="uploading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                <Loader2 className="mx-auto mb-4 text-indigo-400 animate-spin" size={48} />
-                <p className="font-semibold text-indigo-400">{message}</p>
+              <motion.div key="uploading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
+                <Loader2 className="mx-auto text-blue-500 animate-spin" size={40} />
+                <div>
+                  <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Analyzing Document</p>
+                  <p className="text-xs text-slate-400 mt-1">{message}</p>
+                </div>
+                {/* Visual processing timeline */}
+                <div className="max-w-xs mx-auto w-full bg-slate-200 dark:bg-slate-800 h-1 rounded-full overflow-hidden">
+                  <div className="bg-blue-500 h-full w-2/3 animate-[pulse_1s_infinite]" />
+                </div>
               </motion.div>
             )}
 
             {status === 'success' && (
-              <motion.div key="success" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="space-y-4">
-                <CheckCircle className="mx-auto text-emerald-400" size={48} />
-                <p className="font-semibold text-emerald-400">{message}</p>
+              <motion.div key="success" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="space-y-4">
+                <div className="w-12 h-12 bg-emerald-50 dark:bg-emerald-950/30 rounded-full flex items-center justify-center mx-auto text-emerald-500 border border-emerald-100 dark:border-emerald-900/50">
+                  <CheckCircle size={24} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-slate-800 dark:text-white">{message}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Ready for review in directory</p>
+                </div>
 
                 {extractedData && (
-                  <div className="bg-slate-800/50 p-4 rounded-lg text-left max-w-sm mx-auto border border-emerald-500/20">
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <span className="text-gray-400">Company:</span>
-                      <span className="font-medium">{extractedData.company}</span>
-                      <span className="text-gray-400">Total:</span>
-                      <span className="font-medium text-emerald-300 font-mono">${extractedData.total.toFixed(2)}</span>
-                      <span className="text-gray-400">Category:</span>
-                      <span className="font-medium italic">{extractedData.category}</span>
+                  <div className="bg-white dark:bg-slate-900/50 p-4 rounded-xl border border-slate-200 dark:border-slate-800 text-left max-w-sm mx-auto shadow-sm">
+                    <div className="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 dark:border-slate-800 pb-1.5 mb-2">
+                      Extracted Parameters
+                    </div>
+                    <div className="grid grid-cols-3 gap-y-2 gap-x-1 text-xs">
+                      <span className="text-slate-400 col-span-1">Company:</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200 col-span-2 truncate">{extractedData.company || 'N/A'}</span>
+                      <span className="text-slate-400 col-span-1">Total:</span>
+                      <span className="font-bold text-blue-600 dark:text-blue-400 font-mono col-span-2">${(extractedData.total || 0).toFixed(2)}</span>
+                      <span className="text-slate-400 col-span-1">Category:</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200 col-span-2 capitalize">{extractedData.category || 'N/A'}</span>
                     </div>
                   </div>
                 )}
 
-                <button onClick={reset} className="btn btn-primary btn-sm">
-                  Upload Another
+                <button onClick={reset} className="btn-secondary py-1.5 text-xs inline-flex items-center gap-1.5 mx-auto">
+                  <RefreshCw size={12} />
+                  <span>Upload Another Bill</span>
                 </button>
               </motion.div>
             )}
 
             {status === 'error' && (
-              <motion.div key="error" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}>
-                <AlertCircle className="mx-auto mb-4 text-rose-400" size={48} />
-                <p className="font-semibold text-rose-400">{message}</p>
-                <button onClick={reset} className="btn btn-primary btn-sm mt-4">
+              <motion.div key="error" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="space-y-4">
+                <div className="w-12 h-12 bg-rose-50 dark:bg-rose-950/30 rounded-full flex items-center justify-center mx-auto text-rose-500 border border-rose-100 dark:border-rose-900/50">
+                  <AlertCircle size={24} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-rose-500">{message}</p>
+                  <p className="text-xs text-slate-400 mt-1">Please try uploading again or check document type.</p>
+                </div>
+                <button onClick={reset} className="btn-primary py-1.5 text-xs mx-auto">
                   Try Again
                 </button>
               </motion.div>
@@ -300,9 +172,8 @@ const UploadInvoice = ({ onUploadSuccess }) => {
           </AnimatePresence>
         </div>
       )}
-    </motion.div>
+    </div>
   );
 };
 
 export default UploadInvoice;
-
