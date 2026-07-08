@@ -5,7 +5,7 @@ from flask_cors import CORS  # type: ignore
 from werkzeug.utils import secure_filename  # type: ignore
 from bson import ObjectId  # type: ignore
 
-from config import Config  # type: ignore
+from config import Config  
 from db import db_manager  # type: ignore
 from invoice_processor import processor_service  # type: ignore
 from ai_model import categorizer  # type: ignore
@@ -76,6 +76,10 @@ import services.company_service as company_module
 customer_module.customer_service = customer_service
 product_module.product_service = product_service
 company_module.company_service = company_service
+
+# Initialize AI Agent Service
+from services.ai_agent_service import initialize_ai_agent, get_ai_agent
+ai_agent = initialize_ai_agent(db_manager)
 
 # Initialize rate limiting (Phase 4)
 from middleware.rate_limit import init_rate_limiter
@@ -1019,72 +1023,85 @@ def get_dashboard():
         logger.error(f"Dashboard summary fetch failed: {e}")
         return jsonify({"error": "Failed to retrieve dashboard data"}), 500
 
-# Chat route
+# Chat route - AI Agent
 @app.route("/chat", methods=["POST"])
 @require_auth
 def chat():
-    """Smart chatbot for expense queries."""
+    """
+    Intelligent AI assistant for invoice automation.
+    Supports conversation memory, tool-calling, and structured outputs.
+    """
     try:
         data = request.get_json()
         if not data or "message" not in data:
             return jsonify({"error": "Missing message body"}), 400
             
-        query = data.get("message", "")
-        stats = db_manager.get_dashboard_summary()
+        message = data.get("message", "").strip()
+        if not message:
+            return jsonify({"error": "Empty message"}), 400
         
-        if Config.OPENAI_API_KEY:
-            try:
-                from openai import OpenAI
-                import json
-                client = OpenAI(api_key=Config.OPENAI_API_KEY)
-                
-                # Fetch recent invoices for context
-                recent_invoices = list(db_manager.db[Config.INVOICES_COLLECTION].find({}, {"_id": 0, "company": 1, "total": 1, "category": 1, "date": 1, "status": 1}).sort("date", -1).limit(50))
-                
-                system_prompt = f"""You are an intelligent financial assistant for an Invoice Automation system.
-You help users understand their spending, expense categories, and invoice history.
-
-Current Dashboard Stats:
-{json.dumps(stats, indent=2)}
-
-Recent Invoices Data (last 50):
-{json.dumps(recent_invoices, indent=2)}
-
-Instructions:
-1. Answer the user's question concisely based ONLY on the provided data.
-2. If asked about trends (e.g. "last month compared to this month"), try to calculate it from the Recent Invoices Data if the dates are available.
-3. Use markdown formatting for better readability (e.g., bold numbers, bullet points).
-4. Be helpful, professional, and friendly.
-5. If you do not have enough data to answer the query accurately, clearly state that you only have access to the dashboard summary and recent invoices.
-"""
-                
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": query}
-                    ],
-                    max_tokens=300,
-                    temperature=0.3
-                )
-                
-                bot_response = response.choices[0].message.content
-                return jsonify({"response": bot_response}), 200
-            except Exception as e:
-                logger.error(f"OpenAI chat failed: {e}")
-                # Fall back to basic logic below
+        # Get session ID for conversation memory (default to user ID)
+        user_id = get_current_user_id()
+        session_id = data.get("session_id", f"user_{user_id}")
         
-        # Fallback basic logic
-        query_lower = query.lower()
-        if "total" in query_lower or "spend" in query_lower:
-            response = f"📊 Total spend: **${stats['grand_total']:.2f}** ({stats['total_invoices']} invoices)."
-        else:
-            response = "🤖 I can help with spend totals and category breakdowns! (Configure an OPENAI_API_KEY for a smarter AI experience)"
-
-        return jsonify({"response": response}), 200
+        # Use the new AI agent service
+        agent = get_ai_agent()
+        if not agent:
+            # Fallback to basic response if agent not configured
+            return jsonify({
+                "response": "AI agent is not configured. Please set up ANTHROPIC_API_KEY or OPENAI_API_KEY in your environment variables.",
+                "error": "not_configured"
+            }), 503
+        
+        # Get response from AI agent
+        result = agent.chat(
+            message=message,
+            session_id=session_id,
+            user_id=user_id
+        )
+        
+        # Log the interaction for audit purposes
+        audit_service.log(
+            action="ai_chat_query",
+            entity_type="chat",
+            entity_id=session_id,
+            user_id=user_id,
+            details={
+                "message": message[:100],
+                "tools_used": result.get("tools_used", []),
+                "has_error": "error" in result
+            }
+        )
+        
+        return jsonify(result), 200
+        
     except Exception as e:
-        logger.error(f"Chat processing failed: {e}")
-        return jsonify({"error": "Chat service unavailable"}), 500
+        logger.error(f"Chat processing failed: {e}", exc_info=True)
+        return jsonify({
+            "error": "Chat service encountered an error",
+            "details": str(e) if Config.DEBUG else None
+        }), 500
+
+
+@app.route("/chat/history/clear", methods=["POST"])
+@require_auth
+def clear_chat_history():
+    """Clear conversation history for the current session"""
+    try:
+        data = request.get_json() or {}
+        user_id = get_current_user_id()
+        session_id = data.get("session_id", f"user_{user_id}")
+        
+        agent = get_ai_agent()
+        if agent:
+            agent.clear_history(session_id)
+            return jsonify({"message": "Chat history cleared"}), 200
+        
+        return jsonify({"error": "AI agent not available"}), 503
+        
+    except Exception as e:
+        logger.error(f"Failed to clear chat history: {e}")
+        return jsonify({"error": "Failed to clear history"}), 500
 
 # ============================================================================
 # PHASE 3: EXPORT & REPORTING ENDPOINTS
