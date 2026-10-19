@@ -29,7 +29,11 @@ class ARService:
     def _ensure_indexes(self):
         if self.ar_collection is not None:
             try:
-                self.ar_collection.create_index([("invoice_number", 1)], unique=True)
+                self.ar_collection.create_index(
+                    [("invoice_number", 1)],
+                    unique=True,
+                    partialFilterExpression={"invoice_number": {"$type": "string"}}
+                )
                 self.ar_collection.create_index([("customer_id", 1)])
                 self.ar_collection.create_index([("status", 1)])
                 self.ar_collection.create_index([("due_date", 1)])
@@ -98,7 +102,7 @@ class ARService:
             credit_note = CreditNote(
                 credit_note_number=cn_number,
                 invoice_id=invoice_id,
-                customer_id=inv["customer_id"],
+                customer_id=str(inv.get("customer_id") or "unknown_customer"),
                 amount=to_float(credit_amount),
                 reason=reason,
                 created_by=user_id,
@@ -221,6 +225,10 @@ class ARService:
         except Exception as e:
             logger.error(f"Error compiling AR aging report: {e}", exc_info=True)
             return {"aging_buckets": {}, "customers": [], "total_outstanding": 0.0, "error": str(e)}
+
+    def get_aging_report(self, as_of_date: Optional[str] = None) -> Dict[str, Any]:
+        """Alias for get_receivables_aging_report."""
+        return self.get_receivables_aging_report(as_of_date)
 
     def get_customer_statement(self, customer_id: str) -> Dict[str, Any]:
         """Compile complete activity statement for a customer."""

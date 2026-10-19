@@ -74,13 +74,14 @@ class Payment:
             "transaction_reference": self.transaction_reference,
             "external_reference": self.external_reference,
             "status": self.status,
-            "idempotency_key": self.idempotency_key,
             "notes": self.notes,
             "created_at": self.created_at,
             "reversed_at": self.reversed_at,
             "reversed_by": self.reversed_by,
             "reversal_reason": self.reversal_reason
         }
+        if self.idempotency_key is not None:
+            data["idempotency_key"] = self.idempotency_key
         if self._id:
             data["_id"] = self._id
         return data

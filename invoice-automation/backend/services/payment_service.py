@@ -30,7 +30,11 @@ class PaymentService:
         if self.payments_collection is not None:
             try:
                 self.payments_collection.create_index([("invoice_id", 1)])
-                self.payments_collection.create_index([("idempotency_key", 1)], unique=True, sparse=True)
+                self.payments_collection.create_index(
+                    [("idempotency_key", 1)],
+                    unique=True,
+                    partialFilterExpression={"idempotency_key": {"$type": "string"}}
+                )
                 self.payments_collection.create_index([("status", 1)])
                 self.payments_collection.create_index([("created_at", -1)])
             except Exception as e:
@@ -189,29 +193,32 @@ class PaymentService:
         self,
         payment_id: str,
         user_id: str,
-        reason: str
-    ) -> Tuple[bool, Optional[str]]:
+        reason: Optional[str] = None,
+        reversal_reason: Optional[str] = None,
+        invoice_type: Optional[str] = None
+    ) -> Tuple[bool, Optional[Payment], Optional[float], Optional[str]]:
         """
         Reverse a previously completed payment through a controlled operation.
         Restores the invoice outstanding balance and updates workflow status.
         """
+        actual_reason = reversal_reason or reason
         if self.payments_collection is None:
-            return False, "Database not available"
+            return False, None, None, "Database not available"
 
-        if not reason or not reason.strip():
-            return False, "Reversal reason is mandatory"
+        if not actual_reason or not actual_reason.strip():
+            return False, None, None, "Reversal reason is mandatory"
 
         try:
             payment_doc = self.payments_collection.find_one({"_id": ObjectId(payment_id)})
             if not payment_doc:
-                return False, "Payment transaction not found"
+                return False, None, None, "Payment transaction not found"
 
             if payment_doc.get("status") != PaymentStatus.COMPLETED:
-                return False, f"Cannot reverse payment in '{payment_doc.get('status')}' status"
+                return False, None, None, f"Cannot reverse payment in '{payment_doc.get('status')}' status"
 
             invoice_id = payment_doc["invoice_id"]
-            invoice_type = payment_doc.get("invoice_type", "payable")
-            col = self.ap_collection if invoice_type == "payable" else self.ar_collection
+            actual_invoice_type = invoice_type or payment_doc.get("invoice_type", "payable")
+            col = self.ap_collection if actual_invoice_type == "payable" else self.ar_collection
 
             # 1. Update Payment status to REVERSED
             now = datetime.utcnow()
@@ -221,16 +228,16 @@ class PaymentService:
                     "status": PaymentStatus.REVERSED,
                     "reversed_at": now,
                     "reversed_by": user_id,
-                    "reversal_reason": reason.strip()
+                    "reversal_reason": actual_reason.strip()
                 }}
             )
 
             # 2. Recalculate invoice balance
-            total_amount, total_paid, outstanding_balance = self.get_invoice_balance(invoice_id, invoice_type)
+            total_amount, total_paid, outstanding_balance = self.get_invoice_balance(invoice_id, actual_invoice_type)
 
             # Determine restored status
             if outstanding_balance >= total_amount:
-                restored_status = InvoiceStatus.APPROVED if invoice_type == "payable" else "sent"
+                restored_status = InvoiceStatus.APPROVED if actual_invoice_type == "payable" else "sent"
             else:
                 restored_status = "partially_paid"
 
@@ -245,12 +252,15 @@ class PaymentService:
                     }}
                 )
 
+            updated_payment_doc = self.payments_collection.find_one({"_id": ObjectId(payment_id)})
+            payment_obj = Payment.from_dict(updated_payment_doc) if updated_payment_doc else None
+
             logger.info(f"Payment {payment_id} reversed by {user_id}. Invoice {invoice_id} status restored to {restored_status}")
-            return True, None
+            return True, payment_obj, to_float(outstanding_balance), None
 
         except Exception as e:
             logger.error(f"Error reversing payment {payment_id}: {e}", exc_info=True)
-            return False, f"Failed to reverse payment: {str(e)}"
+            return False, None, None, f"Failed to reverse payment: {str(e)}"
 
     def get_payment_history(self, invoice_id: str) -> Dict[str, Any]:
         """Get complete payment history and ledger for an invoice."""

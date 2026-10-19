@@ -284,6 +284,26 @@ class FallbackAIService:
         """Handle total spending queries"""
         try:
             scope = self._get_user_scope_filter(user_id)
+            if not scope and self.db_manager and hasattr(self.db_manager, "get_dashboard_summary"):
+                try:
+                    summary = self.db_manager.get_dashboard_summary()
+                    if summary and (summary.get("grand_total") is not None or summary.get("total_invoices") is not None):
+                        total = summary.get("grand_total", 0.0)
+                        count = summary.get("total_invoices", 0)
+                        categories = summary.get("categories", {})
+                        response = f"📊 **Total Spending**: ${total:,.2f}\n\n"
+                        response += f"You have **{count} active invoices** in the system.\n\n"
+                        if categories:
+                            response += "**Breakdown by Category:**\n"
+                            for cat_name, cat_data in categories.items():
+                                c_amount = cat_data.get("total", 0.0) if isinstance(cat_data, dict) else cat_data
+                                c_count = cat_data.get("count", 0) if isinstance(cat_data, dict) else 1
+                                pct = (c_amount / total * 100) if total > 0 else 0
+                                response += f"- {cat_name}: ${c_amount:,.2f} ({c_count} invoices, {pct:.1f}%)\n"
+                        return {"response": response, "tools_used": ["database_query"]}
+                except Exception as inner_e:
+                    logger.warning(f"Could not use get_dashboard_summary: {inner_e}")
+
             from config import Config
             pipeline = [
                 {"$match": {"status": {"$nin": ["cancelled", "rejected"]}, **scope}},

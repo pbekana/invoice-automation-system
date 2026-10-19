@@ -30,17 +30,38 @@ class DuplicateDetectionService:
     def normalize_invoice_number(num_str: Optional[str]) -> str:
         """
         Normalize invoice numbers for robust matching.
-        Strips non-alphanumerics and leading zeros:
-        'INV-00042' -> '42'
-        '#00123-A'  -> '123A'
+        Strips common prefixes, non-alphanumerics, and leading zeros from numeric components:
+        'INV-00042'     -> '42'
+        '#00123-A'      -> '123A'
+        'inv/2026/0009' -> '20269'
+        '0000'          -> '0'
         """
         if not num_str:
             return ""
-        # Remove non-alphanumerics
-        cleaned = re.sub(r'[^A-Za-z0-9]', '', str(num_str)).upper()
-        # Strip leading zeros while keeping at least one digit if all zeros
-        stripped = re.sub(r'^0+', '', cleaned)
-        return stripped if stripped else cleaned
+        s = str(num_str).strip()
+        # Remove common prefixes like 'INV-', 'INVOICE:', 'NO.', '#'
+        s = re.sub(r'^(?:INV(?:OICE)?|BILL|RECEIPT|NO)[\s\-_/#.:]*', '', s, flags=re.IGNORECASE)
+        s = re.sub(r'^[#\s\-_/.:]+', '', s)
+
+        # Split into alphanumeric chunks by any non-alphanumeric separator
+        parts = re.split(r'[^A-Za-z0-9]+', s)
+        normalized_parts = []
+        for p in parts:
+            if not p:
+                continue
+            if p.isdigit():
+                p_norm = p.lstrip('0')
+                normalized_parts.append(p_norm if p_norm else '0')
+            else:
+                m = re.match(r'^(0+)(\d*[A-Za-z].*)$', p)
+                if m:
+                    p = m.group(2)
+                normalized_parts.append(p.upper())
+
+        result = "".join(normalized_parts)
+        if not result and s:
+            return "0"
+        return result
 
     def check_invoice(
         self,
@@ -115,7 +136,7 @@ class DuplicateDetectionService:
                             "company": cand.get("company"),
                             "total": cand.get("total"),
                             "date": cand.get("date"),
-                            "reason": f"Same vendor with matching normalized invoice number '{normalized_num}'",
+                            "reason": f"Normalized invoice number '{normalized_num}' match for same vendor",
                             "match_level": DuplicateMatchLevel.DEFINITE,
                             "confidence": 0.98
                         })

@@ -149,7 +149,7 @@ class NotificationService:
     def __init__(self, db):
         """Initialize notification service."""
         self.db = db
-        self.notifications = db.notifications
+        self.notifications = db.notifications if db is not None else None
     
     def send_email(
         self,

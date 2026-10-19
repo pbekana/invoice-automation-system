@@ -229,6 +229,14 @@ class InvoiceService:
             "Submitted for approval"
         )
 
+    def submit_invoice(
+        self,
+        invoice_id: str,
+        user_id: str
+    ) -> Tuple[bool, Optional[str]]:
+        """Submit invoice alias for workflow approval."""
+        return self.submit_for_approval(invoice_id, user_id)
+
     def approve_invoice(
         self,
         invoice_id: str,

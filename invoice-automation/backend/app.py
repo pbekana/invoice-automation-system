@@ -77,6 +77,36 @@ customer_module.customer_service = customer_service
 product_module.product_service = product_service
 company_module.company_service = company_service
 
+# Initialize Phase 6-9 production services
+from services.document_storage_service import DocumentStorageService, document_storage_service
+from services.payment_service import PaymentService
+from services.po_matching_service import POMatchingService
+from services.duplicate_detection_service import DuplicateDetectionService
+from services.ar_service import ARService
+from services.accounting_export_service import AccountingExportService
+from models.purchase_order import PurchaseOrder
+
+document_storage_service = DocumentStorageService(db=db_manager.db)
+payment_service = PaymentService(db_manager.db)
+po_matching_service = POMatchingService(db_manager.db)
+duplicate_detection_service = DuplicateDetectionService(db_manager.db)
+ar_service = ARService(db_manager.db)
+accounting_export_service = AccountingExportService(db_manager.db)
+
+import services.document_storage_service as doc_storage_module
+import services.payment_service as payment_module
+import services.po_matching_service as po_module
+import services.duplicate_detection_service as dup_module
+import services.ar_service as ar_module
+import services.accounting_export_service as accounting_export_module
+
+doc_storage_module.document_storage_service = document_storage_service
+payment_module.payment_service = payment_service
+po_module.po_matching_service = po_matching_service
+dup_module.duplicate_detection_service = duplicate_detection_service
+ar_module.ar_service = ar_service
+accounting_export_module.accounting_export_service = accounting_export_service
+
 # Initialize AI Agent Service
 from services.ai_agent_service import initialize_ai_agent, get_ai_agent
 ai_agent = initialize_ai_agent(db_manager)
@@ -426,7 +456,7 @@ def block_vendor(vendor_id):
 @app.route("/upload", methods=["POST"])
 @require_auth
 def upload_invoice():
-    """Upload and process invoice file."""
+    """Upload and process invoice file with permanent document storage and structured extraction."""
     if "file" not in request.files:
         logger.warning("Upload attempt without file.")
         return jsonify({"error": "No file uploaded"}), 400
@@ -438,48 +468,61 @@ def upload_invoice():
         logger.warning(f"Invalid file upload attempt: {file.filename}")
         return jsonify({"error": "Invalid file type. Supported: " + ", ".join(Config.ALLOWED_EXTENSIONS)}), 400
 
-    filepath = None
     try:
-        # Get current user
         user_id = get_current_user_id()
-        
-        # Generate unique filename using UUID to prevent collisions
-        ext = os.path.splitext(file.filename)[1].lower()
-        unique_filename = f"{uuid.uuid4()}{ext}"
-        filepath = os.path.join(Config.UPLOAD_FOLDER, unique_filename)
-        
-        logger.info(f"Saving upload to {filepath} for user {user_id}")
-        file.save(filepath)
+        file_bytes = file.read()
 
-        # Extract text and fields
-        raw_text = processor_service.extract_text(filepath)
+        # Securely store original document (checks MIME magic-bytes and calculates SHA-256 fingerprint)
+        stored_success, doc_meta, storage_err = document_storage_service.store_document(
+            file_bytes=file_bytes,
+            original_filename=file.filename,
+            user_id=user_id
+        )
+
+        if not stored_success or not doc_meta:
+            logger.warning(f"File upload rejected for {file.filename}: {storage_err}")
+            return jsonify({"error": storage_err or "Invalid file signature or storage error"}), 400
+
+        # Retrieve absolute path of saved document for extraction
+        doc_path = document_storage_service.get_document_path(doc_meta["storage_key"])
+
+        # Extract text and structured fields (line items, terms, PO number, subtotal, tax, currency)
+        raw_text = processor_service.extract_text(doc_path)
         fields = processor_service.extract_fields(raw_text)
-        
+
         # Categorize
         category, confidence = categorizer.predict_with_confidence(raw_text)
-        
-        # Get or create vendor from company name
+
+        # Get or create vendor from extracted company name
         vendor = None
+        was_created = False
         if fields.get("company"):
-            success, vendor, was_created = vendor_service.get_or_create_vendor(
+            v_success, vendor, was_created = vendor_service.get_or_create_vendor(
                 name=fields["company"],
                 user_id=user_id,
                 default_category=str(category)
             )
-            if success and was_created:
+            if v_success and was_created:
                 logger.info(f"Auto-created vendor: {vendor.name}")
-        
-        # Check for duplicate invoices
-        duplicate = None
-        if fields.get("total") and fields.get("date"):
-            duplicate = invoice_service.check_duplicate(
-                invoice_number=None,  # We don't extract invoice numbers yet
-                vendor_id=str(vendor._id) if vendor else None,
-                total=fields["total"],
-                date=fields["date"]
-            )
-        
-        # Create invoice using service
+
+        # Multi-signal duplicate check
+        dup_check = duplicate_detection_service.check_invoice(
+            invoice_number=fields.get("invoice_number"),
+            vendor_id=str(vendor._id) if vendor else None,
+            company=fields.get("company"),
+            total=fields.get("total", 0.0),
+            date_str=fields.get("date"),
+            currency=fields.get("currency", "USD"),
+            sha256_hash=doc_meta.get("sha256_hash")
+        )
+        duplicate_status = "potential_duplicate" if dup_check.get("has_duplicate") else "unique"
+
+        # Purchase order matching (cleanly supports non-PO invoices)
+        po_number = fields.get("purchase_order_number")
+        po_match_result = po_matching_service.match_invoice(fields, po_number=po_number)
+        po_match_status = po_match_result.get("match_status", "no_po_required")
+
+        # Create structured invoice record with full Decimal financial details
         success, invoice, error = invoice_service.create_invoice(
             company=fields.get("company", "Unknown"),
             date=fields.get("date"),
@@ -487,15 +530,31 @@ def upload_invoice():
             category=str(category) if category else "Supplies",
             submitter_id=user_id,
             vendor_id=str(vendor._id) if vendor else None,
+            invoice_number=fields.get("invoice_number"),
+            due_date=fields.get("due_date"),
+            currency=fields.get("currency", "USD"),
+            subtotal=fields.get("subtotal"),
+            tax_amount=fields.get("tax_amount"),
+            tax_rate=fields.get("tax_rate"),
+            discount=fields.get("discount"),
+            line_items=fields.get("line_items"),
+            payment_terms=fields.get("payment_terms"),
+            purchase_order_number=po_number,
+            po_match_status=po_match_status,
+            duplicate_status=duplicate_status,
+            sha256_hash=doc_meta.get("sha256_hash"),
+            storage_key=doc_meta.get("storage_key"),
+            original_filename=file.filename,
+            validation=fields.get("validation"),
             raw_text=raw_text,
             confidence=confidence,
             notes=f"Uploaded file: {file.filename}"
         )
-        
-        if not success:
+
+        if not success or not invoice:
             return jsonify({"error": error or "Failed to create invoice"}), 500
-        
-        # Log audit
+
+        # Log audit trail
         audit_service.log_invoice_action(
             AuditAction.INVOICE_CREATED,
             str(invoice._id),
@@ -503,38 +562,97 @@ def upload_invoice():
             {
                 "company": invoice.company,
                 "total": invoice.total,
+                "currency": invoice.currency,
                 "category": invoice.category,
-                "filename": file.filename
+                "filename": file.filename,
+                "storage_key": doc_meta.get("storage_key"),
+                "sha256_hash": doc_meta.get("sha256_hash"),
+                "duplicate_status": duplicate_status,
+                "po_match_status": po_match_status
             }
         )
-        
-        # Clean up file immediately after processing
-        if filepath and os.path.exists(filepath):
-            os.remove(filepath)
-            logger.info("Temporary file removed.")
 
         response_data = {
             "message": "Invoice processed successfully",
             "id": str(invoice._id),
             "invoice": invoice.to_json(),
-            "vendor_created": vendor and success
+            "vendor_created": vendor and was_created,
+            "storage_key": doc_meta.get("storage_key"),
+            "duplicate_detected": dup_check.get("has_duplicate", False),
+            "duplicate_status": duplicate_status,
+            "duplicate_matches": dup_check.get("matches", []),
+            "po_match": po_match_result,
+            "validation": fields.get("validation")
         }
-        
-        # Warn about potential duplicate
-        if duplicate:
-            response_data["warning"] = f"Potential duplicate detected: Invoice {duplicate._id} from {duplicate.date}"
-            response_data["duplicate_invoice_id"] = str(duplicate._id)
-        
+
+        if dup_check.get("has_duplicate"):
+            response_data["warning"] = "Potential duplicate detected across document hash, invoice number, or vendor/date matching"
+
         return jsonify(response_data), 200
 
     except Exception as e:
         logger.error(f"Upload processing failed: {str(e)}", exc_info=True)
-        return jsonify({"error": "An internal error occurred while processing the invoice. Please try again later."}), 500
-    finally:
-        # Emergency cleanup fallback
-        if filepath and os.path.exists(filepath):
-            try: os.remove(filepath)
-            except: pass
+        return jsonify({"error": f"An error occurred while processing the invoice: {str(e)}"}), 500
+
+
+@app.route("/api/documents/<storage_key>", methods=["GET"])
+@require_auth
+def get_stored_document(storage_key):
+    """Retrieve an original stored document securely."""
+    try:
+        safe_key = os.path.basename(storage_key)
+        abs_path = document_storage_service.get_document_path(safe_key)
+        if not abs_path or not os.path.exists(abs_path):
+            return jsonify({"error": "Document not found"}), 404
+
+        ext = os.path.splitext(safe_key)[1].lower()
+        mime_map = {
+            ".pdf": "application/pdf",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".tiff": "image/tiff",
+            ".tif": "image/tiff"
+        }
+        mime = mime_map.get(ext, "application/octet-stream")
+        return send_file(abs_path, mimetype=mime, as_attachment=False)
+    except Exception as e:
+        logger.error(f"Error serving document {storage_key}: {e}")
+        return jsonify({"error": "Failed to serve document"}), 500
+
+
+@app.route("/api/invoices/<invoice_id>/document", methods=["GET"])
+@require_auth
+def get_invoice_document_file(invoice_id):
+    """Retrieve the original uploaded file associated with an invoice."""
+    try:
+        invoice = invoice_service.get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({"error": "Invoice not found"}), 404
+
+        if not invoice.storage_key:
+            return jsonify({"error": "No document file associated with this invoice"}), 404
+
+        abs_path = document_storage_service.get_document_path(invoice.storage_key)
+        if not abs_path or not os.path.exists(abs_path):
+            return jsonify({"error": "Document file missing from storage"}), 404
+
+        download_name = invoice.original_filename or f"invoice_{invoice.invoice_number or invoice_id}.pdf"
+        ext = os.path.splitext(abs_path)[1].lower()
+        mime_map = {
+            ".pdf": "application/pdf",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".tiff": "image/tiff",
+            ".tif": "image/tiff"
+        }
+        mime = mime_map.get(ext, "application/octet-stream")
+        as_attachment = request.args.get("download", "false").lower() == "true"
+        return send_file(abs_path, mimetype=mime, as_attachment=as_attachment, download_name=download_name)
+    except Exception as e:
+        logger.error(f"Error fetching invoice document {invoice_id}: {e}")
+        return jsonify({"error": "Failed to retrieve invoice document"}), 500
 
 # Invoice listing route (with service integration)
 @app.route("/invoices", methods=["GET"])
@@ -812,23 +930,42 @@ def reject_invoice(invoice_id):
 @require_auth
 @require_roles([UserRole.ADMIN, UserRole.APPROVER])
 def mark_invoice_paid(invoice_id):
-    """Mark invoice as paid."""
+    """Mark invoice as paid and record authoritative payment."""
     try:
         data = request.get_json() or {}
         payment_reference = data.get("payment_reference")
         user_id = get_current_user_id()
         
-        success, error = invoice_service.mark_as_paid(invoice_id, user_id, payment_reference)
+        # Determine remaining balance
+        tot, paid, remaining = payment_service.get_invoice_balance(invoice_id, invoice_type="payable")
+        pay_amount = float(remaining) if remaining > 0 else float(tot)
         
-        if not success:
-            return jsonify({"error": error}), 400
+        # Record payment through authoritative payment service
+        if pay_amount > 0:
+            success, p_obj, new_bal, p_err = payment_service.record_payment(
+                invoice_id=invoice_id,
+                amount=pay_amount,
+                user_id=user_id,
+                payment_method=data.get("payment_method", "bank_transfer"),
+                transaction_reference=payment_reference,
+                notes=data.get("notes")
+            )
+            if not success:
+                inv = invoice_service.get_invoice_by_id(invoice_id)
+                if inv and inv.status == "paid":
+                    return jsonify({"message": "Invoice already paid", "invoice": inv.to_json()}), 200
+                return jsonify({"error": p_err or "Failed to record payment"}), 400
+        else:
+            success, error = invoice_service.mark_as_paid(invoice_id, user_id, payment_reference)
+            if not success:
+                return jsonify({"error": error}), 400
         
         # Log audit
         audit_service.log_invoice_action(
             AuditAction.INVOICE_PAID,
             invoice_id,
             user_id,
-            {"payment_reference": payment_reference}
+            {"payment_reference": payment_reference, "amount": pay_amount}
         )
         
         invoice = invoice_service.get_invoice_by_id(invoice_id)
@@ -839,7 +976,7 @@ def mark_invoice_paid(invoice_id):
         }), 200
         
     except Exception as e:
-        logger.error(f"Failed to mark invoice as paid: {e}")
+        logger.error(f"Failed to mark invoice as paid: {e}", exc_info=True)
         return jsonify({"error": "Failed to mark invoice as paid"}), 500
 
 @app.route("/api/invoices/<invoice_id>/cancel", methods=["POST"])
@@ -878,6 +1015,352 @@ def cancel_invoice(invoice_id):
     except Exception as e:
         logger.error(f"Failed to cancel invoice: {e}")
         return jsonify({"error": "Failed to cancel invoice"}), 500
+
+# ============================================================================
+# AUTHORITATIVE PAYMENT ROUTES (Phase 6)
+# ============================================================================
+
+@app.route("/api/invoices/<invoice_id>/payments", methods=["POST"])
+@require_auth
+@require_roles([UserRole.ADMIN, UserRole.APPROVER])
+def record_invoice_payment(invoice_id):
+    """Record an authoritative payment (full or partial) against an invoice."""
+    try:
+        data = request.get_json() or {}
+        amount = data.get("amount")
+        if amount is None:
+            return jsonify({"error": "Payment amount is required"}), 400
+
+        user_id = get_current_user_id()
+        payment_date = data.get("payment_date")
+        payment_method = data.get("payment_method", "bank_transfer")
+        reference = data.get("reference") or data.get("transaction_reference")
+        external_reference = data.get("external_reference")
+        idempotency_key = data.get("idempotency_key")
+        notes = data.get("notes")
+        invoice_type = data.get("type", "payable")
+
+        success, payment, remaining_bal, error = payment_service.record_payment(
+            invoice_id=invoice_id,
+            amount=float(amount),
+            user_id=user_id,
+            payment_date=payment_date,
+            payment_method=payment_method,
+            transaction_reference=reference,
+            external_reference=external_reference,
+            idempotency_key=idempotency_key,
+            notes=notes,
+            invoice_type=invoice_type
+        )
+
+        if not success:
+            return jsonify({"error": error}), 400
+
+        audit_service.log_invoice_action(
+            AuditAction.INVOICE_PAID,
+            invoice_id,
+            user_id,
+            {
+                "payment_id": str(payment._id) if payment else None,
+                "amount": float(amount),
+                "remaining_balance": remaining_bal,
+                "payment_method": payment_method,
+                "reference": reference
+            }
+        )
+
+        inv = invoice_service.get_invoice_by_id(invoice_id) if invoice_type == "payable" else None
+
+        return jsonify({
+            "message": "Payment recorded successfully",
+            "payment": payment.to_dict() if payment else None,
+            "remaining_balance": remaining_bal,
+            "invoice": inv.to_json() if inv else None
+        }), 201
+
+    except Exception as e:
+        logger.error(f"Error recording payment for {invoice_id}: {e}", exc_info=True)
+        return jsonify({"error": f"Failed to record payment: {str(e)}"}), 500
+
+
+@app.route("/api/invoices/<invoice_id>/payments", methods=["GET"])
+@require_auth
+def get_invoice_payments(invoice_id):
+    """Get payment history and authoritative balance for an invoice."""
+    try:
+        invoice_type = request.args.get("type", "payable")
+        payments = payment_service.get_invoice_payments(invoice_id)
+        total_amount, total_paid, outstanding_balance = payment_service.get_invoice_balance(invoice_id, invoice_type)
+
+        return jsonify({
+            "invoice_id": invoice_id,
+            "total_amount": float(total_amount),
+            "total_paid": float(total_paid),
+            "outstanding_balance": float(outstanding_balance),
+            "payment_count": len(payments),
+            "payments": [p.to_dict() for p in payments]
+        }), 200
+    except Exception as e:
+        logger.error(f"Error fetching payments for {invoice_id}: {e}")
+        return jsonify({"error": "Failed to fetch payments"}), 500
+
+
+@app.route("/api/payments/<payment_id>/reverse", methods=["POST"])
+@require_auth
+@require_roles([UserRole.ADMIN])
+def reverse_payment(payment_id):
+    """Reverse a payment with reason and authorization."""
+    try:
+        data = request.get_json() or {}
+        reason = data.get("reason")
+        if not reason or not reason.strip():
+            return jsonify({"error": "Reversal reason is required"}), 400
+
+        user_id = get_current_user_id()
+        invoice_type = data.get("type", "payable")
+
+        success, payment, remaining_bal, error = payment_service.reverse_payment(
+            payment_id=payment_id,
+            user_id=user_id,
+            reversal_reason=reason.strip(),
+            invoice_type=invoice_type
+        )
+
+        if not success:
+            return jsonify({"error": error}), 400
+
+        audit_service.log(
+            action=AuditAction.INVOICE_UPDATED,
+            entity_type="payment",
+            entity_id=payment_id,
+            user_id=user_id,
+            details={
+                "action": "payment_reversal",
+                "payment_id": payment_id,
+                "invoice_id": payment.invoice_id if payment else None,
+                "amount": payment.amount if payment else None,
+                "reason": reason.strip(),
+                "remaining_balance": remaining_bal
+            }
+        )
+
+        return jsonify({
+            "message": "Payment reversed successfully",
+            "payment": payment.to_dict() if payment else None,
+            "remaining_balance": remaining_bal
+        }), 200
+    except Exception as e:
+        logger.error(f"Error reversing payment {payment_id}: {e}", exc_info=True)
+        return jsonify({"error": f"Failed to reverse payment: {str(e)}"}), 500
+
+
+# ============================================================================
+# DUPLICATE DETECTION & REVIEW ROUTES (Phase 4)
+# ============================================================================
+
+@app.route("/api/invoices/<invoice_id>/duplicate-review", methods=["POST"])
+@require_auth
+@require_roles([UserRole.ADMIN, UserRole.APPROVER])
+def review_duplicate_invoice(invoice_id):
+    """Investigate and resolve a duplicate invoice candidate."""
+    try:
+        data = request.get_json() or {}
+        resolution = data.get("resolution")
+        notes = data.get("notes")
+
+        if resolution not in ["confirmed_duplicate", "cleared_false_positive"]:
+            return jsonify({"error": "Resolution must be 'confirmed_duplicate' or 'cleared_false_positive'"}), 400
+
+        if not notes or not notes.strip():
+            return jsonify({"error": "Investigation notes are required"}), 400
+
+        user_id = get_current_user_id()
+        success, error = duplicate_detection_service.resolve_duplicate_investigation(
+            invoice_id=invoice_id,
+            user_id=user_id,
+            resolution=resolution,
+            investigation_notes=notes.strip()
+        )
+
+        if not success:
+            return jsonify({"error": error}), 400
+
+        audit_service.log(
+            action=AuditAction.INVOICE_UPDATED,
+            entity_type="invoice",
+            entity_id=invoice_id,
+            user_id=user_id,
+            details={
+                "action": "duplicate_investigation_resolved",
+                "resolution": resolution,
+                "notes": notes.strip()
+            }
+        )
+
+        invoice = invoice_service.get_invoice_by_id(invoice_id)
+        return jsonify({
+            "message": f"Duplicate investigation resolved as '{resolution}'",
+            "invoice": invoice.to_json() if invoice else None
+        }), 200
+    except Exception as e:
+        logger.error(f"Error reviewing duplicate for {invoice_id}: {e}", exc_info=True)
+        return jsonify({"error": "Failed to resolve duplicate investigation"}), 500
+
+
+@app.route("/api/invoices/duplicates/pending", methods=["GET"])
+@require_auth
+def get_pending_duplicates():
+    """List all invoices flagged as potential duplicates requiring review."""
+    try:
+        query = {
+            "duplicate_status": {"$in": ["potential_duplicate", "definite_duplicate"]},
+            "status": {"$nin": ["cancelled", "rejected"]}
+        }
+        invoices = list(db_manager.db[Config.INVOICES_COLLECTION].find(query).sort("created_at", -1).limit(50))
+        serialized = []
+        for inv in invoices:
+            inv["id"] = str(inv["_id"])
+            inv["_id"] = str(inv["_id"])
+            serialized.append(inv)
+        return jsonify({"duplicates": serialized, "total": len(serialized)}), 200
+    except Exception as e:
+        logger.error(f"Error fetching pending duplicates: {e}")
+        return jsonify({"error": "Failed to fetch duplicate candidates"}), 500
+
+
+# ============================================================================
+# PURCHASE ORDER MATCHING ROUTES (Phase 7)
+# ============================================================================
+
+@app.route("/api/purchase-orders", methods=["POST"])
+@require_auth
+@require_roles([UserRole.ADMIN, UserRole.APPROVER])
+def create_purchase_order():
+    """Create a new Purchase Order for procurement matching."""
+    try:
+        data = request.get_json() or {}
+        required = ["po_number", "vendor_name", "total_amount"]
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
+
+        success, po, error = po_matching_service.create_purchase_order(
+            po_number=data["po_number"],
+            vendor_name=data["vendor_name"],
+            total_amount=float(data["total_amount"]),
+            line_items=data.get("line_items", []),
+            vendor_id=data.get("vendor_id"),
+            currency=data.get("currency", "USD"),
+            tolerance_percent=float(data.get("tolerance_percent", 5.0)),
+            notes=data.get("notes")
+        )
+
+        if not success or not po:
+            return jsonify({"error": error or "Failed to create purchase order"}), 400
+
+        user_id = get_current_user_id()
+        audit_service.log(
+            action=AuditAction.INVOICE_CREATED,
+            entity_type="purchase_order",
+            entity_id=str(po._id),
+            user_id=user_id,
+            details={"po_number": po.po_number, "total_amount": po.total_amount, "vendor": po.vendor_name}
+        )
+
+        return jsonify({"message": "Purchase order created", "purchase_order": po.to_dict()}), 201
+    except Exception as e:
+        logger.error(f"Error creating PO: {e}", exc_info=True)
+        return jsonify({"error": "Failed to create purchase order"}), 500
+
+
+@app.route("/api/purchase-orders", methods=["GET"])
+@require_auth
+def list_purchase_orders():
+    """List purchase orders."""
+    try:
+        status = request.args.get("status")
+        query = {}
+        if status:
+            query["status"] = status
+
+        docs = list(db_manager.db["purchase_orders"].find(query).sort("created_at", -1).limit(50))
+        serialized = []
+        for d in docs:
+            d["id"] = str(d["_id"])
+            d["_id"] = str(d["_id"])
+            serialized.append(d)
+        return jsonify({"purchase_orders": serialized, "total": len(serialized)}), 200
+    except Exception as e:
+        logger.error(f"Error listing POs: {e}")
+        return jsonify({"error": "Failed to list purchase orders"}), 500
+
+
+@app.route("/api/purchase-orders/<po_number_or_id>", methods=["GET"])
+@require_auth
+def get_purchase_order(po_number_or_id):
+    """Get single purchase order and any matched invoices."""
+    try:
+        po = po_matching_service.get_po(po_number_or_id)
+        if not po:
+            try:
+                doc = db_manager.db["purchase_orders"].find_one({"_id": ObjectId(po_number_or_id)})
+                if doc:
+                    po = PurchaseOrder.from_dict(doc)
+            except Exception:
+                pass
+
+        if not po:
+            return jsonify({"error": "Purchase order not found"}), 404
+
+        matched_invoices = list(db_manager.db[Config.INVOICES_COLLECTION].find(
+            {"purchase_order_number": po.po_number},
+            {"_id": 1, "invoice_number": 1, "company": 1, "total": 1, "status": 1, "date": 1, "po_match_status": 1}
+        ))
+        for inv in matched_invoices:
+            inv["id"] = str(inv["_id"])
+            inv["_id"] = str(inv["_id"])
+
+        return jsonify({
+            "purchase_order": po.to_dict(),
+            "matched_invoices": matched_invoices
+        }), 200
+    except Exception as e:
+        logger.error(f"Error fetching PO {po_number_or_id}: {e}")
+        return jsonify({"error": "Failed to fetch purchase order"}), 500
+
+
+@app.route("/api/invoices/<invoice_id>/match-po", methods=["POST"])
+@require_auth
+def match_invoice_po(invoice_id):
+    """Trigger or re-evaluate PO matching against an invoice."""
+    try:
+        invoice = invoice_service.get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({"error": "Invoice not found"}), 404
+
+        data = request.get_json() or {}
+        po_number = data.get("po_number") or invoice.purchase_order_number
+
+        po_result = po_matching_service.match_invoice(invoice.to_dict(), po_number=po_number)
+        match_status = po_result.get("match_status", "no_po_required")
+
+        import datetime as dt
+        db_manager.db[Config.INVOICES_COLLECTION].update_one(
+            {"_id": ObjectId(invoice_id)},
+            {"$set": {
+                "purchase_order_number": po_number,
+                "po_match_status": match_status,
+                "updated_at": dt.datetime.utcnow()
+            }}
+        )
+
+        return jsonify({
+            "message": f"PO Matching evaluated: {match_status}",
+            "po_match": po_result
+        }), 200
+    except Exception as e:
+        logger.error(f"Error matching PO for invoice {invoice_id}: {e}", exc_info=True)
+        return jsonify({"error": "Failed to evaluate PO matching"}), 500
 
 @app.route("/api/invoices/pending-approvals", methods=["GET"])
 @require_auth
@@ -1629,13 +2112,13 @@ def upsert_company():
 
 
 # ============================================================================
-# AR INVOICE ROUTES (Phase 5 — Accounts Receivable)
+# AR INVOICE ROUTES (Phase 5 & 8 — Accounts Receivable)
 # ============================================================================
 
 @app.route("/api/ar/invoices", methods=["POST"])
 @require_auth
 def create_ar_invoice():
-    """Create a new outgoing (AR) invoice to a customer."""
+    """Create a new outgoing (AR) invoice to a customer with authoritative Decimal totals."""
     try:
         data = request.get_json()
         if not data:
@@ -1653,20 +2136,20 @@ def create_ar_invoice():
         if not customer:
             return jsonify({"error": "Customer not found"}), 404
 
-        # Calculate totals from line items
+        # Calculate authoritative totals with Decimal precision
         line_items = data.get("line_items", [])
-        subtotal = sum(
-            float(item.get("quantity", 1)) * float(item.get("unit_price", 0))
-            for item in line_items
+        discount_val = float(data.get("discount", 0.0))
+        subtotal_dec, tax_dec, disc_dec, total_dec = ar_service.calculate_invoice_totals(
+            line_items=line_items,
+            discount_val=discount_val
         )
-        tax_amount = sum(
-            float(item.get("quantity", 1)) * float(item.get("unit_price", 0)) * float(item.get("tax_rate", 0)) / 100
-            for item in line_items
-        )
-        discount = float(data.get("discount", 0))
-        total = round(subtotal + tax_amount - discount, 2)
 
-        # Generate invoice number
+        subtotal = float(subtotal_dec)
+        tax_amount = float(tax_dec)
+        discount = float(disc_dec)
+        total = float(total_dec)
+
+        # Generate unique AR invoice number
         seq_manager = sequence_manager
         inv_number = seq_manager.next_sequence("ar_invoice") if seq_manager else f"AR-{uuid.uuid4().hex[:8].upper()}"
         prefix = data.get("invoice_prefix", "INV-")
@@ -1680,10 +2163,12 @@ def create_ar_invoice():
             "customer_name": customer.name,
             "customer_email": customer.email,
             "line_items": line_items,
-            "subtotal": round(subtotal, 2),
-            "tax_amount": round(tax_amount, 2),
+            "subtotal": subtotal,
+            "tax_amount": tax_amount,
             "discount": discount,
             "total": total,
+            "paid_amount": 0.0,
+            "outstanding_balance": total,
             "currency": data.get("currency", customer.currency or "USD"),
             "status": data.get("status", "draft"),
             "due_date": data.get("due_date"),
@@ -1700,17 +2185,25 @@ def create_ar_invoice():
         doc["_id"] = str(result.inserted_id)
         doc["id"] = doc["_id"]
         doc.pop("_id")
-        if "created_at" in doc:
+        if "created_at" in doc and hasattr(doc["created_at"], "isoformat"):
             doc["created_at"] = doc["created_at"].isoformat()
-        if "updated_at" in doc:
+        if "updated_at" in doc and hasattr(doc["updated_at"], "isoformat"):
             doc["updated_at"] = doc["updated_at"].isoformat()
+
+        audit_service.log(
+            action=AuditAction.INVOICE_CREATED,
+            entity_type="ar_invoice",
+            entity_id=doc["id"],
+            user_id=user_id,
+            details={"invoice_number": invoice_number, "customer": customer.name, "total": total}
+        )
 
         logger.info(f"AR invoice created: {invoice_number} by user {user_id}")
         return jsonify({"message": "Invoice created", "invoice": doc}), 201
 
     except Exception as e:
         logger.error(f"Create AR invoice error: {e}", exc_info=True)
-        return jsonify({"error": "Failed to create invoice"}), 500
+        return jsonify({"error": f"Failed to create invoice: {str(e)}"}), 500
 
 
 @app.route("/api/ar/invoices", methods=["GET"])
@@ -1772,7 +2265,7 @@ def get_ar_invoice(invoice_id):
 @app.route("/api/ar/invoices/<invoice_id>", methods=["PATCH"])
 @require_auth
 def update_ar_invoice(invoice_id):
-    """Update an AR invoice (only draft invoices can be fully edited)."""
+    """Update an AR invoice."""
     try:
         import datetime as dt
         data = request.get_json() or {}
@@ -1781,22 +2274,20 @@ def update_ar_invoice(invoice_id):
         if not existing:
             return jsonify({"error": "Invoice not found"}), 404
 
-        # Recalculate totals if line_items are being updated
-        if "line_items" in data:
-            line_items = data["line_items"]
-            subtotal = sum(
-                float(item.get("quantity", 1)) * float(item.get("unit_price", 0))
-                for item in line_items
+        # Recalculate totals if line_items or discount are being updated
+        if "line_items" in data or "discount" in data:
+            line_items = data.get("line_items", existing.get("line_items", []))
+            discount_val = float(data.get("discount", existing.get("discount", 0.0)))
+            subtotal_dec, tax_dec, disc_dec, total_dec = ar_service.calculate_invoice_totals(
+                line_items=line_items,
+                discount_val=discount_val
             )
-            tax_amount = sum(
-                float(item.get("quantity", 1)) * float(item.get("unit_price", 0)) * float(item.get("tax_rate", 0)) / 100
-                for item in line_items
-            )
-            discount = float(data.get("discount", existing.get("discount", 0)))
-            data["subtotal"] = round(subtotal, 2)
-            data["tax_amount"] = round(tax_amount, 2)
-            data["discount"] = discount
-            data["total"] = round(subtotal + tax_amount - discount, 2)
+            data["subtotal"] = float(subtotal_dec)
+            data["tax_amount"] = float(tax_dec)
+            data["discount"] = float(disc_dec)
+            data["total"] = float(total_dec)
+            paid = float(existing.get("paid_amount", 0.0))
+            data["outstanding_balance"] = max(0.0, float(total_dec) - paid)
 
         protected = ["_id", "type", "created_at", "created_by", "invoice_number"]
         for f in protected:
@@ -1837,27 +2328,192 @@ def send_ar_invoice(invoice_id):
 @app.route("/api/ar/invoices/<invoice_id>/paid", methods=["POST"])
 @require_auth
 def mark_ar_invoice_paid(invoice_id):
-    """Mark an AR invoice as paid."""
+    """Mark an AR invoice as paid and record authoritative payment."""
     try:
         import datetime as dt
         data = request.get_json() or {}
-        db = db_manager.db
-        result = db["ar_invoices"].update_one(
-            {"_id": ObjectId(invoice_id)},
-            {"$set": {
-                "status": "paid",
-                "paid_at": dt.datetime.utcnow(),
-                "payment_method": data.get("payment_method", ""),
-                "payment_reference": data.get("payment_reference", ""),
-                "updated_at": dt.datetime.utcnow()
-            }}
-        )
-        if result.matched_count == 0:
-            return jsonify({"error": "Invoice not found"}), 404
+        user_id = get_current_user_id()
+
+        # Get AR balance
+        tot, paid, remaining = payment_service.get_invoice_balance(invoice_id, invoice_type="receivable")
+        pay_amount = float(remaining) if remaining > 0 else float(tot)
+
+        if pay_amount > 0:
+            success, p_obj, new_bal, p_err = payment_service.record_payment(
+                invoice_id=invoice_id,
+                amount=pay_amount,
+                user_id=user_id,
+                payment_method=data.get("payment_method", "bank_transfer"),
+                transaction_reference=data.get("payment_reference"),
+                notes=data.get("notes"),
+                invoice_type="receivable"
+            )
+            if not success:
+                return jsonify({"error": p_err or "Failed to record payment"}), 400
+        else:
+            db_manager.db["ar_invoices"].update_one(
+                {"_id": ObjectId(invoice_id)},
+                {"$set": {
+                    "status": "paid",
+                    "paid_at": dt.datetime.utcnow(),
+                    "payment_method": data.get("payment_method", ""),
+                    "payment_reference": data.get("payment_reference", ""),
+                    "outstanding_balance": 0.0,
+                    "updated_at": dt.datetime.utcnow()
+                }}
+            )
+
         return jsonify({"message": "Invoice marked as paid"}), 200
     except Exception as e:
         logger.error(f"Mark AR paid error: {e}", exc_info=True)
         return jsonify({"error": "Failed to mark as paid"}), 500
+
+
+@app.route("/api/ar/invoices/<invoice_id>/credit-notes", methods=["POST"])
+@require_auth
+@require_roles([UserRole.ADMIN, UserRole.APPROVER])
+def apply_ar_credit_note(invoice_id):
+    """Issue and apply a credit note against an AR invoice."""
+    try:
+        data = request.get_json() or {}
+        amount = data.get("amount")
+        reason = data.get("reason")
+
+        if amount is None or float(amount) <= 0:
+            return jsonify({"error": "Positive credit amount is required"}), 400
+        if not reason or not reason.strip():
+            return jsonify({"error": "Credit note reason is required"}), 400
+
+        user_id = get_current_user_id()
+        success, cn, new_bal, error = ar_service.apply_credit_note(
+            invoice_id=invoice_id,
+            amount=float(amount),
+            reason=reason.strip(),
+            user_id=user_id
+        )
+
+        if not success or not cn:
+            return jsonify({"error": error or "Failed to apply credit note"}), 400
+
+        audit_service.log(
+            action=AuditAction.INVOICE_UPDATED,
+            entity_type="credit_note",
+            entity_id=str(cn._id),
+            user_id=user_id,
+            details={
+                "action": "credit_note_applied",
+                "invoice_id": invoice_id,
+                "credit_note_number": cn.credit_note_number,
+                "amount": float(amount),
+                "remaining_balance": new_bal,
+                "reason": reason.strip()
+            }
+        )
+
+        return jsonify({
+            "message": "Credit note applied successfully",
+            "credit_note": cn.to_dict(),
+            "remaining_balance": new_bal
+        }), 201
+    except Exception as e:
+        logger.error(f"Error applying credit note to {invoice_id}: {e}", exc_info=True)
+        return jsonify({"error": "Failed to apply credit note"}), 500
+
+
+@app.route("/api/ar/reports/aging", methods=["GET"])
+@require_auth
+def get_ar_aging_report():
+    """Get Accounts Receivable aging buckets (Current, 1-30, 31-60, 61-90, 90+ days)."""
+    try:
+        as_of_date = request.args.get("as_of_date")
+        report = ar_service.get_aging_report(as_of_date=as_of_date)
+        return jsonify(report), 200
+    except Exception as e:
+        logger.error(f"Error generating AR aging report: {e}", exc_info=True)
+        return jsonify({"error": "Failed to generate AR aging report"}), 500
+
+
+@app.route("/api/customers/<customer_id>/statement", methods=["GET"])
+@require_auth
+def get_customer_account_statement(customer_id):
+    """Get authoritative customer account statement with running balance."""
+    try:
+        from_date = request.args.get("from_date")
+        to_date = request.args.get("to_date")
+        statement = ar_service.get_customer_statement(
+            customer_id=customer_id,
+            from_date=from_date,
+            to_date=to_date
+        )
+        return jsonify(statement), 200
+    except Exception as e:
+        logger.error(f"Error generating statement for customer {customer_id}: {e}", exc_info=True)
+        return jsonify({"error": "Failed to generate customer statement"}), 500
+
+
+# ============================================================================
+# ACCOUNTING INTEGRATION & EXPORT ROUTES (Phase 9)
+# ============================================================================
+
+@app.route("/api/accounting/export/invoices", methods=["POST"])
+@require_auth
+@require_roles([UserRole.ADMIN, UserRole.APPROVER])
+def export_accounting_invoices():
+    """Export approved/paid invoices to balanced double-entry GL journal batch."""
+    try:
+        data = request.get_json() or {}
+        invoice_ids = data.get("invoice_ids")
+        include_already_exported = data.get("include_already_exported", False)
+        format_type = data.get("format", "json").lower()
+        user_id = get_current_user_id()
+
+        success, batch_meta, csv_text, error = accounting_export_service.export_approved_invoices_batch(
+            user_id=user_id,
+            invoice_ids=invoice_ids,
+            include_already_exported=include_already_exported
+        )
+
+        if not success or not batch_meta:
+            return jsonify({"error": error or "Failed to generate accounting export"}), 400
+
+        audit_service.log(
+            action=AuditAction.INVOICE_UPDATED,
+            entity_type="accounting_export",
+            entity_id=batch_meta["batch_id"],
+            user_id=user_id,
+            details=batch_meta
+        )
+
+        if format_type == "csv":
+            from flask import Response
+            return Response(
+                csv_text or "",
+                mimetype="text/csv",
+                headers={"Content-Disposition": f"attachment;filename=accounting_export_{batch_meta['batch_id']}.csv"}
+            )
+
+        return jsonify({
+            "message": "Accounting journal export batch generated successfully",
+            "batch": batch_meta,
+            "csv_preview": csv_text[:1000] if csv_text else ""
+        }), 201
+    except Exception as e:
+        logger.error(f"Error exporting accounting batch: {e}", exc_info=True)
+        return jsonify({"error": f"Failed to generate accounting export: {str(e)}"}), 500
+
+
+@app.route("/api/accounting/exports", methods=["GET"])
+@require_auth
+@require_roles([UserRole.ADMIN, UserRole.APPROVER])
+def list_accounting_exports():
+    """List historical accounting export batches with checksums."""
+    try:
+        limit = int(request.args.get("limit", 50))
+        history = accounting_export_service.get_export_history(limit=limit)
+        return jsonify({"exports": history, "total": len(history)}), 200
+    except Exception as e:
+        logger.error(f"Error listing accounting exports: {e}")
+        return jsonify({"error": "Failed to list accounting exports"}), 500
 
 
 # Start Flask app

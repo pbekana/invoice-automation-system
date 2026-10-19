@@ -8,6 +8,7 @@ class InvoiceStatus(str, Enum):
     """Invoice workflow statuses."""
     DRAFT = "draft"
     SUBMITTED = "submitted"
+    PENDING = "pending"
     PENDING_APPROVAL = "pending_approval"
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -224,6 +225,12 @@ class Invoice:
         """Check if transition to new status is valid in the workflow state machine."""
         valid_transitions = {
             InvoiceStatus.DRAFT: [InvoiceStatus.SUBMITTED, InvoiceStatus.CANCELLED],
+            InvoiceStatus.PENDING: [
+                InvoiceStatus.PENDING_APPROVAL,
+                InvoiceStatus.APPROVED,
+                InvoiceStatus.REJECTED,
+                InvoiceStatus.CANCELLED
+            ],
             InvoiceStatus.SUBMITTED: [
                 InvoiceStatus.PENDING_APPROVAL,
                 InvoiceStatus.APPROVED,
