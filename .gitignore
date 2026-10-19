@@ -1,6 +1,10 @@
 # Python virtual environments
 venv/
 .venv/
+**/venv/
+**/venv
+**/.venv/
+**/.venv
 
 # VS Code configuration
 .vscode/
@@ -8,6 +12,8 @@ venv/
 # MongoDB database files and logs
 invoice-automation/backend/data/db/
 invoice-automation/backend/data/mongod.log
+**/data/db/
+**/mongod.log*
 
 # Environment variables and secrets
 .env
@@ -15,5 +21,8 @@ invoice-automation/backend/data/mongod.log
 !.env.example
 
 # Python cache files
+**/__pycache__/
 __pycache__/
 *.py[cod]
+*$py.class
+.pytest_cache/
