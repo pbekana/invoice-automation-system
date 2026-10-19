@@ -178,6 +178,14 @@ class SequenceManager:
             # Fallback: return timestamp-based sequence
             return int(datetime.utcnow().timestamp() * 1000)
     
+    def next_sequence(
+        self,
+        sequence_name: str = "invoice_number",
+        initial_value: int = 1
+    ) -> int:
+        """Alias for get_next_sequence."""
+        return self.get_next_sequence(sequence_name=sequence_name, initial_value=initial_value)
+    
     def get_current_sequence(
         self,
         sequence_name: str = "invoice_number"

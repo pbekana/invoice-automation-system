@@ -1,6 +1,6 @@
 import os
 import uuid
-from flask import Flask, request, jsonify, g  # type: ignore
+from flask import Flask, request, jsonify, g, send_file  # type: ignore
 from flask_cors import CORS  # type: ignore
 from werkzeug.utils import secure_filename  # type: ignore
 from bson import ObjectId  # type: ignore

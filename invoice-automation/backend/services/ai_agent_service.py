@@ -187,14 +187,19 @@ class AIAgentService:
                 return "Database not available"
             
             try:
-                invoice = self.db_manager.db[Config.INVOICES_COLLECTION].find_one(
-                    {"invoice_id": invoice_id},
-                    {"_id": 0}
-                )
+                from bson import ObjectId  # type: ignore
+                query = {}
+                try:
+                    query = {"$or": [{"_id": ObjectId(invoice_id)}, {"invoice_number": invoice_id}]}
+                except Exception:
+                    query = {"invoice_number": invoice_id}
+
+                invoice = self.db_manager.db[Config.INVOICES_COLLECTION].find_one(query)
                 
                 if not invoice:
                     return f"Invoice '{invoice_id}' not found"
                 
+                invoice["id"] = str(invoice.pop("_id", ""))
                 import json
                 return json.dumps(invoice, default=str, indent=2)
             except Exception as e:

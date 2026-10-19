@@ -15,8 +15,19 @@ class AuditAction:
     INVOICE_SUBMITTED = "invoice_submitted"
     INVOICE_APPROVED = "invoice_approved"
     INVOICE_REJECTED = "invoice_rejected"
+    INVOICE_PARTIALLY_PAID = "invoice_partially_paid"
     INVOICE_PAID = "invoice_paid"
     INVOICE_CANCELLED = "invoice_cancelled"
+    
+    # Financial transactions & integrations
+    PAYMENT_RECORDED = "payment_recorded"
+    PAYMENT_REVERSED = "payment_reversed"
+    DUPLICATE_INVESTIGATED = "duplicate_investigated"
+    PO_MATCHED = "po_matched"
+    PO_DISCREPANCY_FLAGGED = "po_discrepancy_flagged"
+    CREDIT_NOTE_CREATED = "credit_note_created"
+    ACCOUNTING_EXPORTED = "accounting_exported"
+    DOCUMENT_ACCESSED = "document_accessed"
     
     # User actions
     USER_REGISTERED = "user_registered"
@@ -40,6 +51,22 @@ class AuditService:
         self.db = db
         self.audit_collection = db[Config.AUDIT_LOG_COLLECTION] if db is not None else None
     
+    @staticmethod
+    def _sanitize(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Strip passwords, access tokens, and sensitive credentials from logs."""
+        if not payload or not isinstance(payload, dict):
+            return {}
+        sanitized = {}
+        sensitive_keys = {'password', 'password_hash', 'access_token', 'refresh_token', 'secret'}
+        for k, v in payload.items():
+            if any(s in k.lower() for s in sensitive_keys):
+                sanitized[k] = "[REDACTED]"
+            elif isinstance(v, dict):
+                sanitized[k] = AuditService._sanitize(v)
+            else:
+                sanitized[k] = v
+        return sanitized
+
     def log(
         self,
         action: str,
@@ -48,9 +75,12 @@ class AuditService:
         user_id: Optional[str],
         details: Optional[Dict[str, Any]] = None,
         changes: Optional[Dict[str, Any]] = None,
-        ip_address: Optional[str] = None
+        previous_values: Optional[Dict[str, Any]] = None,
+        new_values: Optional[Dict[str, Any]] = None,
+        ip_address: Optional[str] = None,
+        tenant_id: Optional[str] = None
     ) -> bool:
-        """Log an audit event."""
+        """Log an audit event with state diffs and sanitized details."""
         if self.audit_collection is None:
             logger.warning("Audit collection not available")
             return False
@@ -59,11 +89,14 @@ class AuditService:
             audit_entry = {
                 "action": action,
                 "entity_type": entity_type,
-                "entity_id": entity_id,
-                "user_id": user_id,
+                "entity_id": str(entity_id),
+                "user_id": str(user_id) if user_id else None,
+                "tenant_id": tenant_id,
                 "timestamp": datetime.utcnow(),
-                "details": details or {},
-                "changes": changes or {},
+                "details": self._sanitize(details),
+                "changes": self._sanitize(changes),
+                "previous_values": self._sanitize(previous_values),
+                "new_values": self._sanitize(new_values),
                 "ip_address": ip_address
             }
             
