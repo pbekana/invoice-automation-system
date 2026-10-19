@@ -1,0 +1,19 @@
+# Python virtual environments
+venv/
+.venv/
+
+# VS Code configuration
+.vscode/
+
+# MongoDB database files and logs
+invoice-automation/backend/data/db/
+invoice-automation/backend/data/mongod.log
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python cache files
+__pycache__/
+*.py[cod]
