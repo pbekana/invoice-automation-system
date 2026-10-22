@@ -187,7 +187,21 @@ class PaymentService:
             if new_status == InvoiceStatus.PAID:
                 invoice_updates["paid_at"] = now
 
-            col.update_one({"_id": ObjectId(invoice_id)}, {"$set": invoice_updates})
+            update_op: Dict[str, Any] = {"$set": invoice_updates}
+            if new_status != current_status:
+                history_record = {
+                    "invoice_id": str(invoice_id),
+                    "previous_status": current_status,
+                    "new_status": new_status,
+                    "user_id": str(user_id),
+                    "role": "finance",
+                    "timestamp": now,
+                    "reason": f"Payment recorded: {transaction_reference or 'Direct'}",
+                    "comment": f"Payment recorded: {transaction_reference or 'Direct'}"
+                }
+                update_op["$push"] = {"status_history": history_record}
+
+            col.update_one({"_id": ObjectId(invoice_id)}, update_op)
 
             logger.info(
                 f"Recorded payment of {currency} {payment.amount} for {invoice_type} invoice {invoice_id}. "

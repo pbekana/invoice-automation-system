@@ -77,7 +77,7 @@ class AIAgentService:
                 logger.error(f"Failed to build agent: {e}. Using fallback mode.")
                 self.use_fallback = True
         else:
-            logger.warning("AI Agent LLM not initialized - using fallback mode (no API keys required)")
+            logger.info("AI Agent operating in fallback mode (no external API keys required)")
             self.use_fallback = True
         
         # Initialize fallback service
@@ -87,13 +87,13 @@ class AIAgentService:
     
     def _initialize_llm(self):
         """Initialize LLM based on configuration"""
-        provider = getattr(Config, 'LLM_PROVIDER', 'anthropic').lower()
+        provider = getattr(Config, 'LLM_PROVIDER', 'fallback').lower()
         
         logger.info(f"Initializing LLM with provider: {provider}")
         
         if provider == 'anthropic':
             if not Config.ANTHROPIC_API_KEY:
-                logger.error("ANTHROPIC_API_KEY not configured")
+                logger.info("ANTHROPIC_API_KEY not configured - defaulting to fallback mode")
                 return None
             
             logger.info("Using Anthropic Claude 3.5 Sonnet")
@@ -110,7 +110,7 @@ class AIAgentService:
                 
         elif provider == 'openai':
             if not Config.OPENAI_API_KEY:
-                logger.error("OPENAI_API_KEY not configured")
+                logger.info("OPENAI_API_KEY not configured - defaulting to fallback mode")
                 return None
             
             logger.info("Using OpenAI GPT-4o-mini")
@@ -124,6 +124,9 @@ class AIAgentService:
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAI: {e}")
                 return None
+        elif provider in ('fallback', 'heuristic', 'none', ''):
+            logger.info(f"LLM provider is set to '{provider}'. Operating in fallback mode without external API keys.")
+            return None
         else:
             logger.error(f"LLM provider '{provider}' not supported")
             return None

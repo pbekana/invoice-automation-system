@@ -176,7 +176,7 @@ const Login = ({ onLoginSuccess, onGoToRegister }) => {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full btn-primary py-2.5 shadow-md shadow-blue-500/10 mt-6"
+                className="w-full btn-primary bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-4 rounded-lg shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2 mt-6 cursor-pointer"
               >
                 {loading ? (
                   <div className="flex items-center justify-center gap-2">
@@ -187,7 +187,7 @@ const Login = ({ onLoginSuccess, onGoToRegister }) => {
                     <span>Signing in...</span>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center justify-center gap-2">
                     <span>Sign In</span>
                     <ArrowRight size={16} />
                   </div>

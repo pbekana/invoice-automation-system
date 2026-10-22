@@ -79,6 +79,9 @@ export const approveInvoice = async (id, comments = '') => { const res = await a
 export const rejectInvoice = async (id, reason) => { const res = await api.post(`/api/invoices/${id}/reject`, { reason }); return res.data; };
 export const requestRevision = async (id, reason) => { const res = await api.post(`/api/invoices/${id}/request-revision`, { reason }); return res.data; };
 export const submitInvoice = async (id) => { const res = await api.post(`/api/invoices/${id}/submit`); return res.data; };
+export const markInvoicePaid = async (id, data = {}) => { const res = await api.post(`/api/invoices/${id}/paid`, data); return res.data; };
+export const cancelInvoice = async (id, reason) => { const res = await api.post(`/api/invoices/${id}/cancel`, { reason }); return res.data; };
+export const getInvoiceHistory = async (id) => { const res = await api.get(`/api/invoices/${id}/history`); return res.data; };
 
 // ─── Payment Tracking ─────────────────────────────────────────────────────────
 export const recordInvoicePayment = async (id, paymentData) => {

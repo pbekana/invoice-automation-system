@@ -43,6 +43,7 @@ from utils.filters import parse_invoice_filters, parse_vendor_filters, parse_sor
 vendor_service = VendorService(db_manager.db)
 invoice_service = InvoiceService(db_manager.db)
 audit_service = AuditService(db_manager.db)
+invoice_service.audit_service = audit_service
 sequence_manager = SequenceManager(db_manager.db)
 notification_service = NotificationService(db_manager.db)
 approval_rules_service = ApprovalRulesService(db_manager.db)
@@ -88,6 +89,7 @@ from models.purchase_order import PurchaseOrder
 
 document_storage_service = DocumentStorageService(db=db_manager.db)
 payment_service = PaymentService(db_manager.db)
+payment_service.audit_service = audit_service
 po_matching_service = POMatchingService(db_manager.db)
 duplicate_detection_service = DuplicateDetectionService(db_manager.db)
 ar_service = ARService(db_manager.db)
@@ -779,8 +781,16 @@ def submit_invoice_for_approval(invoice_id):
         if user and not user.is_admin() and invoice.submitter_id and str(invoice.submitter_id) != str(user_id):
             return jsonify({"error": "Unauthorized: You can only submit your own invoices"}), 403
         
+        user_info = {
+            "name": getattr(user, 'full_name', getattr(user, 'username', None)),
+            "email": getattr(user, 'email', None)
+        }
+        role = "admin" if (user and user.is_admin()) else "submitter"
+
         # Submit for approval
-        success, error = invoice_service.submit_for_approval(invoice_id, user_id)
+        success, error = invoice_service.submit_for_approval(
+            invoice_id, user_id, role=role, user_info=user_info
+        )
         
         if not success:
             return jsonify({"error": error}), 400
@@ -839,20 +849,39 @@ def approve_invoice(invoice_id):
         data = request.get_json() or {}
         comments = data.get("comments")
         user_id = get_current_user_id()
+        current_user = getattr(g, 'current_user', None)
         
         # Get invoice and approver before approval
         invoice = invoice_service.get_invoice_by_id(invoice_id)
         if not invoice:
             return jsonify({"error": "Invoice not found"}), 404
+
+        # Segregation of duties: submitter cannot approve their own invoice
+        if invoice.submitter_id and str(invoice.submitter_id) == str(user_id):
+            return jsonify({"error": "Segregation of duties violation: Submitter cannot approve their own invoice"}), 403
+
+        from models.invoice import InvoiceStatus
+        if invoice.status not in [InvoiceStatus.SUBMITTED, InvoiceStatus.PENDING_APPROVAL]:
+            return jsonify({"error": f"Cannot approve invoice with status '{invoice.status}'. Must be submitted or pending approval."}), 400
         
         users_col = db_manager.db[Config.USERS_COLLECTION] if db_manager.db is not None else None
         approver = users_col.find_one({'_id': ObjectId(user_id)}) if users_col is not None else None
         submitter = users_col.find_one({'_id': ObjectId(invoice.submitter_id)}) if users_col is not None and invoice.submitter_id else None
         
+        user_info = {
+            "name": getattr(current_user, 'full_name', getattr(current_user, 'username', None)),
+            "email": getattr(current_user, 'email', None)
+        }
+        role = "admin" if (current_user and current_user.is_admin()) else "approver"
+
         # Approve invoice
-        success, error = invoice_service.approve_invoice(invoice_id, user_id, comments)
+        success, error = invoice_service.approve_invoice(
+            invoice_id, user_id, comments, role=role, user_info=user_info
+        )
         
         if not success:
+            if error and "Segregation of duties" in error:
+                return jsonify({"error": error}), 403
             return jsonify({"error": error}), 400
         
         # Phase 4: Send notification to submitter
@@ -891,24 +920,37 @@ def approve_invoice(invoice_id):
 def reject_invoice(invoice_id):
     """Reject an invoice with notification to submitter."""
     try:
-        data = request.get_json()
-        if not data or not data.get("reason"):
+        data = request.get_json() or {}
+        reason = data.get("reason", "").strip() if data else ""
+        if not reason:
             return jsonify({"error": "Rejection reason is required"}), 400
         
-        reason = data["reason"]
         user_id = get_current_user_id()
+        current_user = getattr(g, 'current_user', None)
         
         # Get invoice and users before rejection
         invoice = invoice_service.get_invoice_by_id(invoice_id)
         if not invoice:
             return jsonify({"error": "Invoice not found"}), 404
+
+        from models.invoice import InvoiceStatus
+        if invoice.status not in [InvoiceStatus.SUBMITTED, InvoiceStatus.PENDING_APPROVAL]:
+            return jsonify({"error": f"Cannot reject invoice with status '{invoice.status}'. Must be submitted or pending approval."}), 400
         
         users_col = db_manager.db[Config.USERS_COLLECTION] if db_manager.db is not None else None
         approver = users_col.find_one({'_id': ObjectId(user_id)}) if users_col is not None else None
         submitter = users_col.find_one({'_id': ObjectId(invoice.submitter_id)}) if users_col is not None and invoice.submitter_id else None
         
+        user_info = {
+            "name": getattr(current_user, 'full_name', getattr(current_user, 'username', None)),
+            "email": getattr(current_user, 'email', None)
+        }
+        role = "admin" if (current_user and current_user.is_admin()) else "approver"
+
         # Reject invoice
-        success, error = invoice_service.reject_invoice(invoice_id, user_id, reason)
+        success, error = invoice_service.reject_invoice(
+            invoice_id, user_id, reason, role=role, user_info=user_info
+        )
         
         if not success:
             return jsonify({"error": error}), 400
@@ -982,14 +1024,29 @@ def request_invoice_revision(invoice_id):
 
 @app.route("/api/invoices/<invoice_id>/paid", methods=["POST"])
 @require_auth
-@require_roles([UserRole.ADMIN, UserRole.APPROVER])
+@require_roles([UserRole.ADMIN, UserRole.FINANCE, "finance_user", "finance"])
 def mark_invoice_paid(invoice_id):
     """Mark invoice as paid and record authoritative payment."""
     try:
         data = request.get_json() or {}
         payment_reference = data.get("payment_reference")
         user_id = get_current_user_id()
-        
+        current_user = getattr(g, 'current_user', None)
+
+        invoice = invoice_service.get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({"error": "Invoice not found"}), 404
+
+        from models.invoice import InvoiceStatus
+        if invoice.status not in [InvoiceStatus.APPROVED, InvoiceStatus.PARTIALLY_PAID]:
+            return jsonify({"error": f"Cannot mark invoice as paid: Current status is '{invoice.status}', but must be 'approved' or 'partially_paid'"}), 400
+
+        user_info = {
+            "name": getattr(current_user, 'full_name', getattr(current_user, 'username', None)),
+            "email": getattr(current_user, 'email', None)
+        }
+        role = "admin" if (current_user and current_user.is_admin()) else "finance"
+
         # Determine remaining balance
         tot, paid, remaining = payment_service.get_invoice_balance(invoice_id, invoice_type="payable")
         pay_amount = float(remaining) if remaining > 0 else float(tot)
@@ -1002,7 +1059,7 @@ def mark_invoice_paid(invoice_id):
                 user_id=user_id,
                 payment_method=data.get("payment_method", "bank_transfer"),
                 transaction_reference=payment_reference,
-                notes=data.get("notes")
+                notes=data.get("notes") or f"Marked paid by {role}"
             )
             if not success:
                 inv = invoice_service.get_invoice_by_id(invoice_id)
@@ -1010,7 +1067,9 @@ def mark_invoice_paid(invoice_id):
                     return jsonify({"message": "Invoice already paid", "invoice": inv.to_json()}), 200
                 return jsonify({"error": p_err or "Failed to record payment"}), 400
         else:
-            success, error = invoice_service.mark_as_paid(invoice_id, user_id, payment_reference)
+            success, error = invoice_service.mark_as_paid(
+                invoice_id, user_id, payment_reference, role=role, user_info=user_info
+            )
             if not success:
                 return jsonify({"error": error}), 400
         
@@ -1035,18 +1094,44 @@ def mark_invoice_paid(invoice_id):
 
 @app.route("/api/invoices/<invoice_id>/cancel", methods=["POST"])
 @require_auth
-@require_roles([UserRole.ADMIN])
+@require_roles([UserRole.ADMIN, UserRole.SUBMITTER, "submitter"])
 def cancel_invoice(invoice_id):
     """Cancel an invoice."""
     try:
-        data = request.get_json()
-        if not data or not data.get("reason"):
+        data = request.get_json() or {}
+        reason = data.get("reason", "").strip() if data else ""
+        if not reason:
             return jsonify({"error": "Cancellation reason is required"}), 400
         
-        reason = data["reason"]
         user_id = get_current_user_id()
-        
-        success, error = invoice_service.cancel_invoice(invoice_id, user_id, reason)
+        current_user = getattr(g, 'current_user', None)
+        is_admin = current_user.is_admin() if current_user else False
+
+        invoice = invoice_service.get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({"error": "Invoice not found"}), 404
+
+        from models.invoice import InvoiceStatus
+        if not is_admin:
+            if invoice.submitter_id and str(invoice.submitter_id) != str(user_id):
+                return jsonify({"error": "Unauthorized: You can only cancel your own invoices"}), 403
+
+            allowed_cancel_statuses = [InvoiceStatus.SUBMITTED, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.DRAFT]
+            if invoice.status not in allowed_cancel_statuses:
+                return jsonify({"error": f"Submitters cannot cancel an invoice with status '{invoice.status}'. Only submitted invoices may be cancelled."}), 400
+        else:
+            if invoice.status in [InvoiceStatus.PAID, InvoiceStatus.CANCELLED]:
+                return jsonify({"error": f"Cannot cancel an invoice with terminal status '{invoice.status}'"}), 400
+
+        user_info = {
+            "name": getattr(current_user, 'full_name', getattr(current_user, 'username', None)),
+            "email": getattr(current_user, 'email', None)
+        }
+        role = "admin" if is_admin else "submitter"
+
+        success, error = invoice_service.cancel_invoice(
+            invoice_id, user_id, reason, role=role, user_info=user_info
+        )
         
         if not success:
             return jsonify({"error": error}), 400
@@ -1076,7 +1161,7 @@ def cancel_invoice(invoice_id):
 
 @app.route("/api/invoices/<invoice_id>/payments", methods=["POST"])
 @require_auth
-@require_roles([UserRole.ADMIN, UserRole.APPROVER])
+@require_roles([UserRole.ADMIN, UserRole.FINANCE, "finance_user", "finance"])
 def record_invoice_payment(invoice_id):
     """Record an authoritative payment (full or partial) against an invoice."""
     try:
@@ -1084,6 +1169,14 @@ def record_invoice_payment(invoice_id):
         amount = data.get("amount")
         if amount is None:
             return jsonify({"error": "Payment amount is required"}), 400
+
+        invoice = invoice_service.get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({"error": "Invoice not found"}), 404
+
+        from models.invoice import InvoiceStatus
+        if invoice.status not in [InvoiceStatus.APPROVED, InvoiceStatus.PARTIALLY_PAID]:
+            return jsonify({"error": f"Cannot record payment for invoice with status '{invoice.status}'. Invoice must be approved first."}), 400
 
         user_id = get_current_user_id()
         payment_date = data.get("payment_date")
@@ -1438,18 +1531,38 @@ def get_pending_approvals():
 @app.route("/api/invoices/<invoice_id>/history", methods=["GET"])
 @require_auth
 def get_invoice_history(invoice_id):
-    """Get audit history for an invoice."""
+    """Get audit and status history for an invoice."""
     try:
-        history = audit_service.get_entity_history("invoice", invoice_id)
+        user_id = get_current_user_id()
+        current_user = getattr(g, 'current_user', None)
+
+        invoice = invoice_service.get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({"error": "Invoice not found"}), 404
+
+        # Role-based scoping: submitters can only view history for their own invoices
+        if current_user and not current_user.is_admin() and not current_user.is_approver() and not current_user.is_finance():
+            if invoice.submitter_id and str(invoice.submitter_id) != str(user_id):
+                return jsonify({"error": "Unauthorized: You can only view history of your own invoices"}), 403
+
+        status_history = invoice.status_history or []
+        history = audit_service.get_entity_history("invoice", invoice_id) if audit_service else []
         
         return jsonify({
             "invoice_id": invoice_id,
+            "status_history": status_history,
             "history": history
         }), 200
         
     except Exception as e:
         logger.error(f"Failed to get invoice history: {e}")
         return jsonify({"error": "Failed to retrieve invoice history"}), 500
+
+@app.route("/api/invoices/<invoice_id>/history", methods=["POST", "PUT", "PATCH", "DELETE"])
+@require_auth
+def block_invoice_history_mutation(invoice_id):
+    """Audit trails and status history are immutable and cannot be modified or deleted."""
+    return jsonify({"error": "Status history and audit records are immutable and cannot be modified or deleted"}), 403
 
 # ============================================================================
 # AUDIT ROUTES (Protected)

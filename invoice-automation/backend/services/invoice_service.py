@@ -14,10 +14,11 @@ from logger_config import logger
 class InvoiceService:
     """Handles invoice business logic, atomic state machine transitions, and workflow."""
 
-    def __init__(self, db):
+    def __init__(self, db, audit_service=None):
         self.db = db
         self.invoices_collection = db[Config.INVOICES_COLLECTION] if db is not None else None
         self.duplicate_service = DuplicateDetectionService(db)
+        self.audit_service = audit_service
 
     def create_invoice(
         self,
@@ -82,12 +83,45 @@ class InvoiceService:
                 notes=notes
             )
 
+            now = invoice.created_at or datetime.utcnow()
+            initial_history = {
+                "invoice_id": None,
+                "previous_status": None,
+                "new_status": invoice.status,
+                "user_id": str(submitter_id) if submitter_id else None,
+                "role": "submitter",
+                "timestamp": now,
+                "reason": "Initial submission" if invoice.status == InvoiceStatus.SUBMITTED else "Invoice created",
+                "comment": "Initial submission" if invoice.status == InvoiceStatus.SUBMITTED else "Invoice created"
+            }
+            invoice.status_history = [initial_history]
+
             inv_dict = invoice.to_dict()
             if invoice_number:
                 inv_dict["normalized_invoice_number"] = DuplicateDetectionService.normalize_invoice_number(invoice_number)
 
             result = self.invoices_collection.insert_one(inv_dict)
             invoice._id = str(result.inserted_id)
+            initial_history["invoice_id"] = invoice._id
+            self.invoices_collection.update_one(
+                {"_id": result.inserted_id},
+                {"$set": {"status_history.0.invoice_id": invoice._id}}
+            )
+
+            if getattr(self, 'audit_service', None):
+                self.audit_service.log(
+                    action=AuditAction.INVOICE_CREATED,
+                    entity_type="invoice",
+                    entity_id=invoice._id,
+                    user_id=str(submitter_id) if submitter_id else None,
+                    details={
+                        "previous_status": None,
+                        "new_status": invoice.status,
+                        "role": "submitter",
+                        "reason": "Invoice created"
+                    },
+                    new_values={"status": invoice.status, "total": invoice.total, "company": invoice.company}
+                )
 
             logger.info(f"Invoice created: {invoice._id} by user {submitter_id}")
             return True, invoice, None
@@ -130,7 +164,7 @@ class InvoiceService:
                 return False, f"Cannot edit invoice in status: {invoice.status}"
 
             # Protect critical workflow fields
-            protected = ["_id", "submitter_id", "created_at", "approval_chain", "storage_key", "sha256_hash"]
+            protected = ["_id", "submitter_id", "created_at", "approval_chain", "status_history", "status", "storage_key", "sha256_hash"]
             for field in protected:
                 updates.pop(field, None)
 
@@ -167,11 +201,13 @@ class InvoiceService:
         invoice_id: str,
         new_status: str,
         user_id: str,
-        comments: Optional[str] = None
+        comments: Optional[str] = None,
+        role: Optional[str] = None,
+        user_info: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, Optional[str]]:
         """
-        Change invoice status with server-side state machine validation
-        and optimistic concurrency control.
+        Change invoice status with server-side state machine validation,
+        persistent status history tracking, and optimistic concurrency control.
         """
         if self.invoices_collection is None:
             return False, "Database not available"
@@ -185,31 +221,73 @@ class InvoiceService:
             if not invoice.can_transition_to(new_status):
                 return False, f"Invalid transition: Cannot transition from '{invoice.status}' to '{new_status}'"
 
+            previous_status = invoice.status
+            now = datetime.utcnow()
+
             updates: Dict[str, Any] = {
                 "status": new_status,
-                "updated_at": datetime.utcnow()
+                "updated_at": now
             }
 
             if new_status == InvoiceStatus.APPROVED:
-                updates["approved_at"] = datetime.utcnow()
+                updates["approved_at"] = now
             elif new_status == InvoiceStatus.PAID:
-                updates["paid_at"] = datetime.utcnow()
+                updates["paid_at"] = now
 
             # Record in approval chain
             if comments or new_status in [InvoiceStatus.APPROVED, InvoiceStatus.REJECTED]:
                 invoice.add_approval(user_id, new_status, comments)
                 updates["approval_chain"] = invoice.approval_chain
 
-            # Atomic update enforcing optimistic concurrency check on status
+            # Construct status history record
+            history_record = {
+                "invoice_id": str(invoice_id),
+                "previous_status": previous_status,
+                "new_status": new_status,
+                "user_id": str(user_id) if user_id else None,
+                "role": role or "user",
+                "user_name": user_info.get("name") if user_info else None,
+                "user_email": user_info.get("email") if user_info else None,
+                "timestamp": now,
+                "reason": comments or "",
+                "comment": comments or ""
+            }
+
+            # Atomic update enforcing optimistic concurrency check on status and recording history
             result = self.invoices_collection.update_one(
-                {"_id": ObjectId(invoice_id), "status": invoice.status},
-                {"$set": updates}
+                {"_id": ObjectId(invoice_id), "status": previous_status},
+                {
+                    "$set": updates,
+                    "$push": {"status_history": history_record}
+                }
             )
 
             if result.matched_count == 0:
                 return False, "Concurrent conflict: Invoice was modified or transitioned by another user"
 
-            logger.info(f"Invoice status changed: {invoice_id} from {invoice.status} to {new_status} by {user_id}")
+            # Persist to audit_logs collection consistently
+            if getattr(self, 'audit_service', None):
+                action = f"invoice_{new_status}"
+                self.audit_service.log(
+                    action=action,
+                    entity_type="invoice",
+                    entity_id=str(invoice_id),
+                    user_id=str(user_id) if user_id else None,
+                    details={
+                        "previous_status": previous_status,
+                        "new_status": new_status,
+                        "role": role or "user",
+                        "reason": comments or "",
+                        "comments": comments or "",
+                        "user_name": user_info.get("name") if user_info else None,
+                        "user_email": user_info.get("email") if user_info else None
+                    },
+                    changes={"status": {"from": previous_status, "to": new_status}},
+                    previous_values={"status": previous_status},
+                    new_values={"status": new_status}
+                )
+
+            logger.info(f"Invoice status changed: {invoice_id} from {previous_status} to {new_status} by {user_id} ({role})")
             return True, None
 
         except Exception as e:
@@ -219,29 +297,37 @@ class InvoiceService:
     def submit_for_approval(
         self,
         invoice_id: str,
-        user_id: str
+        user_id: str,
+        role: Optional[str] = None,
+        user_info: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, Optional[str]]:
         """Submit invoice for approval."""
         return self.change_status(
             invoice_id,
             InvoiceStatus.PENDING_APPROVAL,
             user_id,
-            "Submitted for approval"
+            "Submitted for approval",
+            role=role or "submitter",
+            user_info=user_info
         )
 
     def submit_invoice(
         self,
         invoice_id: str,
-        user_id: str
+        user_id: str,
+        role: Optional[str] = None,
+        user_info: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, Optional[str]]:
         """Submit invoice alias for workflow approval."""
-        return self.submit_for_approval(invoice_id, user_id)
+        return self.submit_for_approval(invoice_id, user_id, role=role, user_info=user_info)
 
     def approve_invoice(
         self,
         invoice_id: str,
         approver_id: str,
-        comments: Optional[str] = None
+        comments: Optional[str] = None,
+        role: Optional[str] = None,
+        user_info: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, Optional[str]]:
         """
         Approve an invoice.
@@ -255,7 +341,7 @@ class InvoiceService:
             return False, "Invoice not found"
 
         # 1. Enforce Segregation of Duties
-        if str(invoice.submitter_id) == str(approver_id):
+        if invoice.submitter_id and str(invoice.submitter_id) == str(approver_id):
             logger.warning(f"Self-approval rejected for user {approver_id} on invoice {invoice_id}")
             return False, "Segregation of duties violation: Submitter cannot approve their own invoice"
 
@@ -272,14 +358,18 @@ class InvoiceService:
             invoice_id,
             InvoiceStatus.APPROVED,
             approver_id,
-            comments or "Approved"
+            comments or "Approved",
+            role=role or "approver",
+            user_info=user_info
         )
 
     def request_revision(
         self,
         invoice_id: str,
         approver_id: str,
-        reason: str
+        reason: str,
+        role: Optional[str] = None,
+        user_info: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, Optional[str]]:
         """Request revision/correction on an invoice with feedback for submitter."""
         if not reason or not reason.strip():
@@ -296,14 +386,18 @@ class InvoiceService:
             invoice_id,
             InvoiceStatus.NEEDS_REVISION,
             approver_id,
-            f"Needs Revision: {reason.strip()}"
+            f"Needs Revision: {reason.strip()}",
+            role=role or "approver",
+            user_info=user_info
         )
 
     def reject_invoice(
         self,
         invoice_id: str,
         approver_id: str,
-        reason: str
+        reason: str,
+        role: Optional[str] = None,
+        user_info: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, Optional[str]]:
         """Reject an invoice with mandatory reason."""
         if not reason or not reason.strip():
@@ -320,24 +414,37 @@ class InvoiceService:
             invoice_id,
             InvoiceStatus.REJECTED,
             approver_id,
-            f"Rejected: {reason.strip()}"
+            f"Rejected: {reason.strip()}",
+            role=role or "approver",
+            user_info=user_info
         )
 
     def mark_as_paid(
         self,
         invoice_id: str,
         user_id: str,
-        payment_reference: Optional[str] = None
+        payment_reference: Optional[str] = None,
+        role: Optional[str] = None,
+        user_info: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, Optional[str]]:
         """Mark invoice as paid."""
         comments = f"Marked as paid. Reference: {payment_reference}" if payment_reference else "Marked as paid"
-        return self.change_status(invoice_id, InvoiceStatus.PAID, user_id, comments)
+        return self.change_status(
+            invoice_id,
+            InvoiceStatus.PAID,
+            user_id,
+            comments,
+            role=role or "finance",
+            user_info=user_info
+        )
 
     def cancel_invoice(
         self,
         invoice_id: str,
         user_id: str,
-        reason: str
+        reason: str,
+        role: Optional[str] = None,
+        user_info: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, Optional[str]]:
         """Cancel an invoice."""
         if not reason or not reason.strip():
@@ -347,7 +454,9 @@ class InvoiceService:
             invoice_id,
             InvoiceStatus.CANCELLED,
             user_id,
-            f"Cancelled: {reason.strip()}"
+            f"Cancelled: {reason.strip()}",
+            role=role or "submitter",
+            user_info=user_info
         )
 
     def list_invoices(
@@ -374,8 +483,10 @@ class InvoiceService:
             if tenant_id:
                 query["tenant_id"] = tenant_id
 
-            # Role-based scoping: non-admins and non-approvers only see their own submitted invoices
-            if user_roles and UserRole.ADMIN not in user_roles and UserRole.APPROVER not in user_roles:
+            # Role-based scoping: submitters only see their own submitted invoices.
+            # Admins, approvers, finance users, and viewers can see invoices across the organization.
+            org_view_roles = {UserRole.ADMIN, UserRole.APPROVER, UserRole.FINANCE, "finance_user", UserRole.VIEWER}
+            if user_roles and not any(r in org_view_roles for r in user_roles):
                 query["submitter_id"] = user_id
 
             if status:

@@ -9,7 +9,13 @@ class UserRole(str, Enum):
     ADMIN = "admin"
     APPROVER = "approver"
     SUBMITTER = "submitter"
+    FINANCE = "finance"
     VIEWER = "viewer"
+
+    @classmethod
+    def is_valid_role(cls, role: str) -> bool:
+        valid_roles = {cls.ADMIN, cls.APPROVER, cls.SUBMITTER, cls.FINANCE, cls.VIEWER, "finance_user"}
+        return role in valid_roles or role in [r.value for r in cls]
 
 
 class UserStatus(str, Enum):
@@ -26,7 +32,7 @@ class User:
         self,
         email: str,
         name: str,
-        password_hash: str,
+        password_hash: str = "",
         roles: List[str] = None,
         status: str = UserStatus.ACTIVE,
         department: Optional[str] = None,
@@ -112,11 +118,27 @@ class User:
     def is_active(self) -> bool:
         """Check if user account is active."""
         return self.status == UserStatus.ACTIVE
-    
+
+    def is_finance(self) -> bool:
+        """Check if user has finance role."""
+        return self.has_any_role([UserRole.FINANCE, "finance_user", "finance"])
+
+    def is_approver(self) -> bool:
+        """Check if user has approver role."""
+        return self.has_any_role([UserRole.ADMIN, UserRole.APPROVER])
+
+    def is_submitter(self) -> bool:
+        """Check if user has submitter role."""
+        return self.has_any_role([UserRole.ADMIN, UserRole.SUBMITTER])
+
+    def can_pay(self) -> bool:
+        """Check if user can mark invoices as paid or record payments."""
+        return self.has_any_role([UserRole.ADMIN, UserRole.FINANCE, "finance_user", "finance"])
+
     def can_approve(self) -> bool:
         """Check if user can approve invoices."""
         return self.has_any_role([UserRole.ADMIN, UserRole.APPROVER])
-    
+
     def can_submit(self) -> bool:
         """Check if user can submit invoices."""
         return self.has_any_role([UserRole.ADMIN, UserRole.APPROVER, UserRole.SUBMITTER])

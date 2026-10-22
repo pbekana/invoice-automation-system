@@ -59,6 +59,7 @@ class Invoice:
         confidence: Optional[Dict[str, float]] = None,
         line_items: Optional[List[Dict[str, Any]]] = None,
         approval_chain: Optional[List[Dict[str, Any]]] = None,
+        status_history: Optional[List[Dict[str, Any]]] = None,
         notes: Optional[str] = None,
         _id: Optional[str] = None,
         created_at: Optional[datetime] = None,
@@ -98,6 +99,7 @@ class Invoice:
         self.confidence = confidence or {}
         self.line_items = line_items or []
         self.approval_chain = approval_chain or []
+        self.status_history = status_history or []
         self.notes = notes
         self.created_at = created_at or datetime.utcnow()
         self.updated_at = updated_at or datetime.utcnow()
@@ -150,6 +152,7 @@ class Invoice:
             "confidence": self.confidence,
             "line_items": self.line_items,
             "approval_chain": self.approval_chain,
+            "status_history": self.status_history,
             "notes": self.notes,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -192,6 +195,13 @@ class Invoice:
             "confidence": self.confidence,
             "line_items": self.line_items,
             "approval_chain": self.approval_chain,
+            "status_history": [
+                {
+                    **h,
+                    "timestamp": h["timestamp"].isoformat() if isinstance(h.get("timestamp"), datetime) else h.get("timestamp")
+                }
+                for h in (self.status_history or [])
+            ],
             "notes": self.notes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -232,6 +242,7 @@ class Invoice:
             confidence=data.get("confidence", {}),
             line_items=data.get("line_items", []),
             approval_chain=data.get("approval_chain", []),
+            status_history=data.get("status_history", []),
             notes=data.get("notes"),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),

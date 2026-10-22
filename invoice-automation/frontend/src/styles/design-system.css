@@ -5,6 +5,36 @@
 
 @import "tailwindcss";
 
+:root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --border: #e2e8f0;
+  --ring: #0ea5e9;
+  --primary: #0284c7;
+  --primary-hover: #0369a1;
+  --text-muted: #64748b;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+}
+
+.dark {
+  --background: #090d16;
+  --foreground: #f1f5f9;
+  --card: #0f172a;
+  --card-foreground: #f1f5f9;
+  --border: #1e293b;
+  --ring: #38adf8;
+  --primary: #0ea5e9;
+  --primary-hover: #38adf8;
+  --text-muted: #94a3b8;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+}
+
 /* ============================================
    COLOR SYSTEM
    ============================================ */

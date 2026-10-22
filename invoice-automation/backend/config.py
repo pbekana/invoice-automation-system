@@ -42,7 +42,7 @@ class Config:
     # AI/OCR settings
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")  # 'anthropic' or 'openai'
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "fallback")  # 'anthropic', 'openai', or 'fallback'
     DPI = 300
     OCR_PSM = 6
     MODEL_PATH = os.path.join(BASE_DIR, "invoice_model.joblib")

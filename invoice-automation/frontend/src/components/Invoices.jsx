@@ -3,7 +3,9 @@ import {
   getInvoices, 
   submitInvoice, 
   recordInvoicePayment, 
-  getInvoicePayments 
+  getInvoicePayments,
+  getInvoiceHistory,
+  cancelInvoice
 } from '../services/api';
 import UploadInvoice from './UploadInvoice';
 import { 
@@ -75,15 +77,18 @@ export default function Invoices({ refreshTrigger = 0 }) {
   const roles = user?.roles || [];
   const isViewer = roles.length === 1 && roles[0] === 'viewer';
   const canUpload = !isViewer;
-  const canPay = roles.includes('admin') || roles.includes('approver');
+  const canPay = roles.includes('admin') || roles.includes('finance') || roles.includes('finance_user');
 
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [submittingId, setSubmittingId] = useState(null);
+  const [cancellingId, setCancellingId] = useState(null);
   const [uploadDrawerOpen, setUploadDrawerOpen] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState(null);
+  const [invoiceHistory, setInvoiceHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Payment recording state
   const [payModalInvoice, setPayModalInvoice] = useState(null);
@@ -93,6 +98,27 @@ export default function Invoices({ refreshTrigger = 0 }) {
   const [payNotes, setPayNotes] = useState('');
   const [recordingPay, setRecordingPay] = useState(false);
   const [invoicePayments, setInvoicePayments] = useState([]);
+
+  useEffect(() => {
+    if (selectedInvoice) {
+      const invId = selectedInvoice.id || selectedInvoice._id;
+      setHistoryLoading(true);
+      getInvoiceHistory(invId)
+        .then(res => {
+          const list = (res.status_history && res.status_history.length > 0)
+            ? res.status_history
+            : (selectedInvoice.status_history || []);
+          setInvoiceHistory(list);
+        })
+        .catch(err => {
+          console.error('Failed to load status history:', err);
+          setInvoiceHistory(selectedInvoice.status_history || []);
+        })
+        .finally(() => setHistoryLoading(false));
+    } else {
+      setInvoiceHistory([]);
+    }
+  }, [selectedInvoice]);
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
@@ -125,6 +151,25 @@ export default function Invoices({ refreshTrigger = 0 }) {
       addToast(error.response?.data?.error || 'Failed to submit invoice.', 'error');
     } finally {
       setSubmittingId(null);
+    }
+  };
+
+  const handleCancel = async (id) => {
+    const reason = window.prompt('Please enter the cancellation reason:');
+    if (!reason || !reason.trim()) return;
+
+    setCancellingId(id);
+    try {
+      await cancelInvoice(id, reason.trim());
+      addToast('Invoice cancelled successfully.', 'success');
+      fetchInvoices();
+      if (selectedInvoice && (selectedInvoice.id === id || selectedInvoice._id === id)) {
+        setSelectedInvoice(null);
+      }
+    } catch (error) {
+      addToast(error.response?.data?.error || 'Failed to cancel invoice.', 'error');
+    } finally {
+      setCancellingId(null);
     }
   };
 
@@ -301,6 +346,7 @@ export default function Invoices({ refreshTrigger = 0 }) {
                   const invId = inv.id || inv._id;
                   const isOwner = inv.submitter_id && user?.id && String(inv.submitter_id) === String(user.id);
                   const canSubmitThis = (roles.includes('admin') || isOwner) && ['draft', 'rejected', 'needs_revision'].includes(inv.status);
+                  const canCancelThis = (roles.includes('admin') || isOwner) && ['submitted', 'pending_approval', 'draft'].includes(inv.status);
                   const canPayThis = canPay && ['approved', 'partially_paid'].includes(inv.status);
                   const bal = inv.outstanding_balance !== undefined ? inv.outstanding_balance : (inv.status === 'paid' ? 0 : inv.total);
 
@@ -357,6 +403,17 @@ export default function Invoices({ refreshTrigger = 0 }) {
                               className="btn-primary py-1 px-2.5 text-[11px]"
                             >
                               {submittingId === invId ? 'Submitting...' : 'Submit'}
+                            </button>
+                          )}
+
+                          {canCancelThis && (
+                            <button
+                              onClick={() => handleCancel(invId)}
+                              disabled={cancellingId === invId}
+                              className="px-2 py-1 text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg border border-rose-200 dark:border-rose-900/40 text-[11px] font-medium"
+                              title="Cancel Invoice"
+                            >
+                              {cancellingId === invId ? 'Cancelling...' : 'Cancel'}
                             </button>
                           )}
 
@@ -457,29 +514,73 @@ export default function Invoices({ refreshTrigger = 0 }) {
                 </span>
               </div>
 
-              {selectedInvoice.approval_chain && selectedInvoice.approval_chain.length > 0 && (
-                <div className="space-y-1.5">
-                  <span className="text-[10px] uppercase font-bold text-neutral-400 tracking-wider">
-                    Approval & Audit Log
+              {/* Status History / Audit Trail */}
+              <div className="space-y-1.5 pt-2 border-t border-neutral-100 dark:border-neutral-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-bold text-neutral-400 tracking-wider flex items-center gap-1.5">
+                    <Clock size={11} className="text-blue-500" />
+                    <span>Status History (Audit Trail)</span>
                   </span>
-                  <div className="divide-y divide-neutral-100 dark:divide-neutral-800 max-h-32 overflow-y-auto bg-neutral-50 dark:bg-neutral-950 p-2 rounded-xl border border-neutral-100 dark:border-neutral-800">
-                    {selectedInvoice.approval_chain.map((a, i) => (
-                      <div key={i} className="py-1.5 flex justify-between items-center text-[11px]">
-                        <div>
-                          <span className="font-semibold capitalize">{a.status}: </span>
-                          <span className="text-neutral-500">{a.comments || 'No comment'}</span>
+                  <span className="text-[10px] text-neutral-400 font-mono">
+                    {invoiceHistory.length} {invoiceHistory.length === 1 ? 'record' : 'records'}
+                  </span>
+                </div>
+
+                {historyLoading ? (
+                  <div className="py-3 text-center text-xs text-neutral-400">Loading audit history...</div>
+                ) : invoiceHistory.length === 0 ? (
+                  <div className="p-3 text-center text-xs text-neutral-400 bg-neutral-50 dark:bg-neutral-950 rounded-xl border border-neutral-100 dark:border-neutral-800">
+                    No status history recorded yet.
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                    {invoiceHistory.map((entry, idx) => (
+                      <div key={idx} className="p-2 rounded-xl bg-neutral-50 dark:bg-neutral-950 border border-neutral-100 dark:border-neutral-800 text-[11px] space-y-1">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1 font-semibold">
+                            <span className="px-1.5 py-0.5 rounded text-[9px] bg-neutral-200 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 uppercase">
+                              {entry.previous_status || 'initial'}
+                            </span>
+                            <ArrowRight size={10} className="text-neutral-400" />
+                            <span className="px-1.5 py-0.5 rounded text-[9px] bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 uppercase font-bold">
+                              {entry.new_status}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-neutral-400 font-mono">
+                            {entry.timestamp ? new Date(entry.timestamp).toLocaleString() : ''}
+                          </span>
                         </div>
-                        <span className="text-[10px] text-neutral-400 font-mono">
-                          {a.timestamp ? a.timestamp.slice(0, 10) : ''}
-                        </span>
+                        <div className="text-[10px] text-neutral-500 flex justify-between">
+                          <span>
+                            By: <strong className="text-neutral-700 dark:text-neutral-300">{entry.user_name || entry.user_email || entry.user_id || 'System'}</strong>
+                            {entry.role && <span className="ml-1 text-neutral-400 font-mono">({entry.role})</span>}
+                          </span>
+                        </div>
+                        {(entry.reason || entry.comment) && (
+                          <div className="text-[10px] text-neutral-600 dark:text-neutral-400 italic bg-white dark:bg-neutral-900 px-2 py-0.5 rounded border border-neutral-100 dark:border-neutral-800">
+                            "{entry.reason || entry.comment}"
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-3 border-t border-neutral-100 dark:border-neutral-800">
+            <div className="flex justify-between items-center gap-2 pt-3 border-t border-neutral-100 dark:border-neutral-800">
+              <div>
+                {(roles.includes('admin') || (selectedInvoice.submitter_id && String(selectedInvoice.submitter_id) === String(user?.id))) && 
+                  ['submitted', 'pending_approval', 'draft'].includes(selectedInvoice.status) && (
+                  <button
+                    onClick={() => handleCancel(selectedInvoice.id || selectedInvoice._id)}
+                    disabled={cancellingId === (selectedInvoice.id || selectedInvoice._id)}
+                    className="px-2.5 py-1 text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg border border-rose-200 dark:border-rose-900/40 text-xs font-semibold"
+                  >
+                    {cancellingId === (selectedInvoice.id || selectedInvoice._id) ? 'Cancelling...' : 'Cancel Invoice'}
+                  </button>
+                )}
+              </div>
               <button 
                 onClick={() => setSelectedInvoice(null)}
                 className="btn-secondary py-1.5 text-xs"
