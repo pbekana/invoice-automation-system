@@ -1,6 +1,6 @@
 import os
 import uuid
-from flask import Flask, request, jsonify, g, send_file  # type: ignore
+from flask import Flask, request, jsonify, g, send_file, Response  # type: ignore
 from flask_cors import CORS  # type: ignore
 from werkzeug.utils import secure_filename  # type: ignore
 from bson import ObjectId  # type: ignore
@@ -110,6 +110,9 @@ accounting_export_module.accounting_export_service = accounting_export_service
 # Initialize AI Agent Service
 from services.ai_agent_service import initialize_ai_agent, get_ai_agent
 ai_agent = initialize_ai_agent(db_manager)
+from services.reconciliation_service import ReconciliationService
+reconciliation_service = ReconciliationService(db_manager.db)
+
 
 # Initialize rate limiting (Phase 4)
 from middleware.rate_limit import init_rate_limiter
@@ -455,6 +458,7 @@ def block_vendor(vendor_id):
 
 @app.route("/upload", methods=["POST"])
 @require_auth
+@require_roles([UserRole.ADMIN, UserRole.SUBMITTER, UserRole.APPROVER])
 def upload_invoice():
     """Upload and process invoice file with permanent document storage and structured extraction."""
     if "file" not in request.files:
@@ -718,6 +722,7 @@ def get_invoice(invoice_id):
 
 @app.route("/api/invoices/<invoice_id>", methods=["PATCH"])
 @require_auth
+@require_roles([UserRole.ADMIN, UserRole.SUBMITTER, UserRole.APPROVER])
 def update_invoice(invoice_id):
     """Update invoice fields (only if editable)."""
     try:
@@ -726,6 +731,12 @@ def update_invoice(invoice_id):
             return jsonify({"error": "Request body required"}), 400
         
         user_id = get_current_user_id()
+        current_inv = invoice_service.get_invoice_by_id(invoice_id)
+        if not current_inv:
+            return jsonify({"error": "Invoice not found"}), 404
+        user = getattr(g, 'current_user', None)
+        if user and not user.is_admin() and current_inv.submitter_id and str(current_inv.submitter_id) != str(user_id):
+            return jsonify({"error": "Unauthorized: You can only edit your own invoices"}), 403
         
         success, error = invoice_service.update_invoice(invoice_id, data, user_id)
         
@@ -754,6 +765,7 @@ def update_invoice(invoice_id):
 
 @app.route("/api/invoices/<invoice_id>/submit", methods=["POST"])
 @require_auth
+@require_roles([UserRole.ADMIN, UserRole.SUBMITTER, UserRole.APPROVER])
 def submit_invoice_for_approval(invoice_id):
     """Submit invoice for approval with automatic approver assignment."""
     try:
@@ -763,6 +775,9 @@ def submit_invoice_for_approval(invoice_id):
         invoice = invoice_service.get_invoice_by_id(invoice_id)
         if not invoice:
             return jsonify({"error": "Invoice not found"}), 404
+        user = getattr(g, 'current_user', None)
+        if user and not user.is_admin() and invoice.submitter_id and str(invoice.submitter_id) != str(user_id):
+            return jsonify({"error": "Unauthorized: You can only submit your own invoices"}), 403
         
         # Submit for approval
         success, error = invoice_service.submit_for_approval(invoice_id, user_id)
@@ -775,16 +790,17 @@ def submit_invoice_for_approval(invoice_id):
         invoice_dict = invoice.to_dict()
         
         # Phase 4: Determine approvers using approval rules
+        users_col = db_manager.db[Config.USERS_COLLECTION] if db_manager.db is not None else None
         approvers, required_count = approval_rules_service.determine_approvers(
             invoice_dict,
-            db_manager.db.users
+            users_col
         )
         
         logger.info(f"Invoice {invoice_id} requires {required_count} approvals from {len(approvers)} potential approvers")
         
         # Phase 4: Send notifications to approvers
-        if Config.NOTIFICATIONS_ENABLED and approvers:
-            submitter = db_manager.db.users.find_one({'_id': ObjectId(user_id)})
+        if Config.NOTIFICATIONS_ENABLED and approvers and users_col is not None:
+            submitter = users_col.find_one({'_id': ObjectId(user_id)})
             notification_service.notify_invoice_submitted(
                 invoice_dict,
                 submitter,
@@ -829,8 +845,9 @@ def approve_invoice(invoice_id):
         if not invoice:
             return jsonify({"error": "Invoice not found"}), 404
         
-        approver = db_manager.db.users.find_one({'_id': ObjectId(user_id)})
-        submitter = db_manager.db.users.find_one({'_id': ObjectId(invoice.submitter_id)}) if invoice.submitter_id else None
+        users_col = db_manager.db[Config.USERS_COLLECTION] if db_manager.db is not None else None
+        approver = users_col.find_one({'_id': ObjectId(user_id)}) if users_col is not None else None
+        submitter = users_col.find_one({'_id': ObjectId(invoice.submitter_id)}) if users_col is not None and invoice.submitter_id else None
         
         # Approve invoice
         success, error = invoice_service.approve_invoice(invoice_id, user_id, comments)
@@ -886,8 +903,9 @@ def reject_invoice(invoice_id):
         if not invoice:
             return jsonify({"error": "Invoice not found"}), 404
         
-        approver = db_manager.db.users.find_one({'_id': ObjectId(user_id)})
-        submitter = db_manager.db.users.find_one({'_id': ObjectId(invoice.submitter_id)}) if invoice.submitter_id else None
+        users_col = db_manager.db[Config.USERS_COLLECTION] if db_manager.db is not None else None
+        approver = users_col.find_one({'_id': ObjectId(user_id)}) if users_col is not None else None
+        submitter = users_col.find_one({'_id': ObjectId(invoice.submitter_id)}) if users_col is not None and invoice.submitter_id else None
         
         # Reject invoice
         success, error = invoice_service.reject_invoice(invoice_id, user_id, reason)
@@ -925,6 +943,42 @@ def reject_invoice(invoice_id):
     except Exception as e:
         logger.error(f"Failed to reject invoice: {e}", exc_info=True)
         return jsonify({"error": "Failed to reject invoice"}), 500
+
+@app.route("/api/invoices/<invoice_id>/request-revision", methods=["POST"])
+@require_auth
+@require_roles([UserRole.ADMIN, UserRole.APPROVER])
+def request_invoice_revision(invoice_id):
+    """Request revision/correction on an invoice with feedback for submitter."""
+    try:
+        data = request.get_json() or {}
+        reason = data.get("reason")
+        if not reason or not reason.strip():
+            return jsonify({"error": "Revision feedback is required"}), 400
+
+        user_id = get_current_user_id()
+        invoice = invoice_service.get_invoice_by_id(invoice_id)
+        if not invoice:
+            return jsonify({"error": "Invoice not found"}), 404
+
+        success, error = invoice_service.request_revision(invoice_id, user_id, reason.strip())
+        if not success:
+            return jsonify({"error": error}), 400
+
+        audit_service.log_invoice_action(
+            AuditAction.INVOICE_REJECTED,
+            invoice_id,
+            user_id,
+            {"action": "revision_requested", "reason": reason.strip()}
+        )
+
+        updated_inv = invoice_service.get_invoice_by_id(invoice_id)
+        return jsonify({
+            "message": "Revision requested successfully",
+            "invoice": updated_inv.to_json() if updated_inv else None
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to request revision for invoice {invoice_id}: {e}", exc_info=True)
+        return jsonify({"error": "Failed to request revision"}), 500
 
 @app.route("/api/invoices/<invoice_id>/paid", methods=["POST"])
 @require_auth
@@ -1527,21 +1581,22 @@ def chat():
         user_id = get_current_user_id()
         session_id = data.get("session_id", f"user_{user_id}")
         
-        # Use the new AI agent service
+        # Use AI agent or fallback seamlessly to heuristic financial assistant
         agent = get_ai_agent()
-        if not agent:
-            # Fallback to basic response if agent not configured
-            return jsonify({
-                "response": "AI agent is not configured. Please set up ANTHROPIC_API_KEY or OPENAI_API_KEY in your environment variables.",
-                "error": "not_configured"
-            }), 503
-        
-        # Get response from AI agent
-        result = agent.chat(
-            message=message,
-            session_id=session_id,
-            user_id=user_id
-        )
+        if agent and not getattr(agent, 'use_fallback', False):
+            result = agent.chat(
+                message=message,
+                session_id=session_id,
+                user_id=user_id
+            )
+        else:
+            from services.fallback_ai_service import FallbackAIService
+            fallback = FallbackAIService(db_manager)
+            result = fallback.chat(
+                message=message,
+                session_id=session_id,
+                user_id=user_id
+            )
         
         # Log the interaction for audit purposes
         audit_service.log(
@@ -1890,6 +1945,8 @@ def health_check():
     """Health check endpoint for monitoring."""
     try:
         # Check database connection
+        if db_manager.db is None:
+            raise RuntimeError("Database connection not established")
         db_manager.db.command('ping')
         
         return jsonify({
@@ -2520,3 +2577,130 @@ def list_accounting_exports():
 if __name__ == "__main__":
     logger.info(f"Starting server on port {Config.PORT}...")
     app.run(host="0.0.0.0", port=Config.PORT, debug=Config.DEBUG)
+
+# ============================================================================
+# EXTENDED CSV EXPORT ROUTES
+# ============================================================================
+
+@app.route("/api/export/vendors", methods=["GET"])
+@require_auth
+def export_vendors_csv():
+    """Export vendor records to CSV."""
+    try:
+        vendors = vendor_service.list_vendors(limit=1000)
+        vendors_dicts = [v.to_dict() for v in vendors]
+        csv_data = CSVExporter.export_vendors(vendors_dicts)
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=vendors.csv"}
+        )
+    except Exception as e:
+        logger.error(f"Vendor export failed: {e}")
+        return jsonify({"error": "Failed to export vendors"}), 500
+
+
+@app.route("/api/export/customers", methods=["GET"])
+@require_auth
+def export_customers_csv():
+    """Export customer records to CSV."""
+    try:
+        customers_col = db_manager.db["customers"] if db_manager.db is not None else None
+        customers = list(customers_col.find({}).limit(1000)) if customers_col is not None else []
+        for c in customers:
+            c["id"] = str(c["_id"])
+        csv_data = CSVExporter.export_customers(customers)
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=customers.csv"}
+        )
+    except Exception as e:
+        logger.error(f"Customer export failed: {e}")
+        return jsonify({"error": "Failed to export customers"}), 500
+
+
+@app.route("/api/export/payments", methods=["GET"])
+@require_auth
+def export_payments_csv():
+    """Export authoritative payments records to CSV."""
+    try:
+        payments_col = db_manager.db["payments"] if db_manager.db is not None else None
+        payments = list(payments_col.find({}).sort("created_at", -1).limit(1000)) if payments_col is not None else []
+        for p in payments:
+            p["id"] = str(p["_id"])
+        csv_data = CSVExporter.export_payments(payments)
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=payments.csv"}
+        )
+    except Exception as e:
+        logger.error(f"Payments export failed: {e}")
+        return jsonify({"error": "Failed to export payments"}), 500
+
+
+# ============================================================================
+# BANK STATEMENT RECONCILIATION ROUTES
+# ============================================================================
+
+@app.route("/api/reconciliation/statement", methods=["POST"])
+@require_auth
+@require_roles([UserRole.ADMIN, UserRole.APPROVER])
+def upload_reconciliation_statement():
+    """Import a bank statement CSV and reconcile against recorded payments."""
+    try:
+        user_id = get_current_user_id()
+        if "file" in request.files:
+            file = request.files["file"]
+            csv_content = file.read().decode("utf-8", errors="replace")
+            filename = file.filename
+        else:
+            data = request.get_json() or {}
+            csv_content = data.get("csv_content", "")
+            filename = data.get("filename", "statement.csv")
+
+        if not csv_content.strip():
+            return jsonify({"error": "CSV content is required"}), 400
+
+        success, result, error = reconciliation_service.import_and_reconcile_statement(
+            csv_content=csv_content,
+            user_id=user_id,
+            filename=filename
+        )
+        if not success:
+            return jsonify({"error": error}), 400
+
+        return jsonify({
+            "message": "Statement reconciled successfully",
+            "batch": result
+        }), 201
+    except Exception as e:
+        logger.error(f"Error in reconciliation statement upload: {e}", exc_info=True)
+        return jsonify({"error": f"Failed to reconcile statement: {str(e)}"}), 500
+
+
+@app.route("/api/reconciliation/batches", methods=["GET"])
+@require_auth
+def get_reconciliation_batches():
+    """List historical reconciliation batches."""
+    try:
+        batches = reconciliation_service.get_batches()
+        return jsonify({"batches": batches, "total": len(batches)}), 200
+    except Exception as e:
+        logger.error(f"Error fetching reconciliation batches: {e}")
+        return jsonify({"error": "Failed to fetch reconciliation batches"}), 500
+
+
+@app.route("/api/reconciliation/batches/<batch_id>", methods=["GET"])
+@require_auth
+def get_reconciliation_batch_details(batch_id):
+    """Get single reconciliation batch with item breakdown."""
+    try:
+        batch = reconciliation_service.get_batch(batch_id)
+        if not batch:
+            return jsonify({"error": "Reconciliation batch not found"}), 404
+        return jsonify({"batch": batch}), 200
+    except Exception as e:
+        logger.error(f"Error fetching batch {batch_id}: {e}")
+        return jsonify({"error": "Failed to fetch batch"}), 500

@@ -116,6 +116,54 @@ class CSVExporter:
         return output.getvalue()
     
     @staticmethod
+    def export_customers(customers: List[Dict[str, Any]]) -> str:
+        """Export customers to CSV format."""
+        if not customers:
+            return ""
+        output = io.StringIO()
+        fieldnames = ["ID", "Name", "Email", "Phone", "Billing Address", "Shipping Address", "Currency", "Payment Terms", "Notes"]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for c in customers:
+            writer.writerow({
+                "ID": c.get("id") or str(c.get("_id", "")),
+                "Name": c.get("name", ""),
+                "Email": c.get("email", ""),
+                "Phone": c.get("phone", ""),
+                "Billing Address": c.get("billing_address", ""),
+                "Shipping Address": c.get("shipping_address", ""),
+                "Currency": c.get("currency", "USD"),
+                "Payment Terms": c.get("payment_terms", ""),
+                "Notes": c.get("notes", "")
+            })
+        return output.getvalue()
+
+    @staticmethod
+    def export_payments(payments: List[Dict[str, Any]]) -> str:
+        """Export payments to CSV format."""
+        if not payments:
+            return ""
+        output = io.StringIO()
+        fieldnames = ["Payment ID", "Invoice ID", "Amount", "Currency", "Payment Date", "Method", "Reference", "External Reference", "Status", "Created By", "Reversal Reason"]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for p in payments:
+            writer.writerow({
+                "Payment ID": p.get("id") or str(p.get("_id", "")),
+                "Invoice ID": p.get("invoice_id", ""),
+                "Amount": p.get("amount", 0.0),
+                "Currency": p.get("currency", "USD"),
+                "Payment Date": p.get("payment_date", ""),
+                "Method": p.get("payment_method", ""),
+                "Reference": p.get("transaction_reference", ""),
+                "External Reference": p.get("external_reference", ""),
+                "Status": p.get("status", ""),
+                "Created By": p.get("created_by", ""),
+                "Reversal Reason": p.get("reversal_reason", "")
+            })
+        return output.getvalue()
+
+    @staticmethod
     def export_audit_log(audit_entries: List[Dict[str, Any]]) -> str:
         """
         Export audit log to CSV format.

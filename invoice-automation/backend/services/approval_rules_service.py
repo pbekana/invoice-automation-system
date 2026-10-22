@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 from logger_config import logger
 from bson import ObjectId  # type: ignore
+from config import Config  # type: ignore
 
 
 class ApprovalRule:
@@ -126,11 +127,14 @@ class ApprovalRulesService:
     def __init__(self, db):
         """Initialize approval rules service."""
         self.db = db
-        self.rules_collection = db.approval_rules
-        self._ensure_default_rules()
+        self.rules_collection = db[Config.APPROVAL_RULES_COLLECTION] if db is not None else None
+        if self.rules_collection is not None:
+            self._ensure_default_rules()
     
     def _ensure_default_rules(self) -> None:
         """Ensure default rules exist in database."""
+        if self.rules_collection is None:
+            return
         try:
             for rule_data in self.DEFAULT_RULES:
                 existing = self.rules_collection.find_one({'rule_id': rule_data['rule_id']})
@@ -143,6 +147,8 @@ class ApprovalRulesService:
     
     def get_all_rules(self, active_only: bool = True) -> List[ApprovalRule]:
         """Get all approval rules."""
+        if self.rules_collection is None:
+            return []
         try:
             query = {'active': True} if active_only else {}
             rules_data = list(self.rules_collection.find(query).sort('priority', 1))
@@ -186,6 +192,9 @@ class ApprovalRulesService:
         Returns:
             Tuple of (list of approver user objects, required approval count)
         """
+        if users_collection is None:
+            return [], 1
+
         matching_rules = self.get_matching_rules(invoice)
         
         if not matching_rules:
@@ -277,6 +286,8 @@ class ApprovalRulesService:
         users_collection
     ) -> List[Dict]:
         """Get escalation approvers (typically higher management)."""
+        if users_collection is None:
+            return []
         # Get admins as escalation approvers
         escalation_approvers = list(users_collection.find({
             'roles': 'admin',
@@ -296,6 +307,8 @@ class ApprovalRulesService:
         priority: int = 0
     ) -> Tuple[bool, Optional[Dict], Optional[str]]:
         """Create a new approval rule."""
+        if self.rules_collection is None:
+            return False, None, "Database not available"
         try:
             # Check if rule ID already exists
             existing = self.rules_collection.find_one({'rule_id': rule_id})
@@ -329,6 +342,8 @@ class ApprovalRulesService:
         updates: Dict
     ) -> Tuple[bool, Optional[str]]:
         """Update an existing rule."""
+        if self.rules_collection is None:
+            return False, "Database not available"
         try:
             updates['updated_at'] = datetime.utcnow()
             result = self.rules_collection.update_one(
@@ -352,6 +367,8 @@ class ApprovalRulesService:
     
     def get_rule(self, rule_id: str) -> Optional[ApprovalRule]:
         """Get a specific rule by ID."""
+        if self.rules_collection is None:
+            return None
         try:
             rule_doc = self.rules_collection.find_one({'rule_id': rule_id})
             if rule_doc:

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { getVendors } from '../services/api';
 import { Building, Phone, Mail, MapPin, Search, Tag, Calendar, AlertCircle } from 'lucide-react';
 
@@ -7,24 +7,24 @@ const Vendors = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
-  const fetchVendors = async () => {
+  const fetchVendors = useCallback(async (search) => {
     setLoading(true);
     try {
-      const data = await getVendors({ search: searchTerm });
+      const data = await getVendors({ search });
       setVendors(Array.isArray(data) ? data : data.vendors || []);
     } catch (error) {
       console.error('Failed to fetch vendors:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     const delayDebounceFn = setTimeout(() => {
-      fetchVendors();
+      fetchVendors(searchTerm);
     }, 400);
     return () => clearTimeout(delayDebounceFn);
-  }, [searchTerm]);
+  }, [searchTerm, fetchVendors]);
 
   return (
     <div className="space-y-6">

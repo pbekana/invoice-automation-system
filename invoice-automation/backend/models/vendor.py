@@ -90,7 +90,7 @@ class Vendor:
         return Vendor(
             _id=str(data.get("_id")) if data.get("_id") else None,
             name=data["name"],
-            normalized_name=data["normalized_name"],
+            normalized_name=data.get("normalized_name") or Vendor.normalize_name(data.get("name", "Unknown")),
             status=data.get("status", VendorStatus.ACTIVE),
             email=data.get("email"),
             phone=data.get("phone"),

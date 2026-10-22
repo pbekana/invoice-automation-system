@@ -129,7 +129,7 @@ const UploadInvoice = ({ onUploadSuccess }) => {
                 </div>
                 <div>
                   <p className="text-sm font-bold text-slate-800 dark:text-white">{message}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Ready for review in directory</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{file ? file.name : 'Ready for review in directory'}</p>
                 </div>
 
                 {extractedData && (

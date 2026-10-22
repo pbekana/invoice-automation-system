@@ -298,3 +298,29 @@ class TestApprovalRulesService:
         deleted_rule = next((r for r in all_rules if r.rule_id == 'delete_test'), None)
         assert deleted_rule is not None
         assert deleted_rule.active is False
+
+    def test_service_with_none_db(self):
+        """Test ApprovalRulesService initializes and degrades gracefully with None db."""
+        service = ApprovalRulesService(None)
+        assert service.db is None
+        assert service.rules_collection is None
+        assert service.get_all_rules() == []
+        assert service.get_rule('any_rule') is None
+        
+        success, doc, err = service.create_rule('rule1', 'Rule 1', {}, ['admin'])
+        assert success is False
+        assert err == "Database not available"
+        
+        success, err = service.update_rule('rule1', {'priority': 5})
+        assert success is False
+        assert err == "Database not available"
+
+    def test_determine_approvers_with_none_users_collection(self):
+        """Test determine_approvers handles None users_collection safely."""
+        service = ApprovalRulesService(None)
+        approvers, count = service.determine_approvers({'total': 100}, None)
+        assert approvers == []
+        assert count == 1
+        
+        escalation = service.get_escalation_approvers({'_id': 'inv1'}, None)
+        assert escalation == []

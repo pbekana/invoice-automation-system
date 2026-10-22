@@ -12,9 +12,11 @@ class InvoiceStatus(str, Enum):
     PENDING_APPROVAL = "pending_approval"
     APPROVED = "approved"
     REJECTED = "rejected"
+    NEEDS_REVISION = "needs_revision"
     PARTIALLY_PAID = "partially_paid"
     PAID = "paid"
     CANCELLED = "cancelled"
+    OVERDUE = "overdue"
 
 
 class ApprovalStatus(str, Enum):
@@ -102,6 +104,20 @@ class Invoice:
         self.approved_at = approved_at
         self.paid_at = paid_at
 
+    @property
+    def is_overdue(self) -> bool:
+        """Dynamically determine if invoice is past due date with outstanding balance."""
+        if not self.due_date:
+            return False
+        if self.status in [InvoiceStatus.PAID, InvoiceStatus.CANCELLED]:
+            return False
+        try:
+            due = datetime.strptime(str(self.due_date)[:10], "%Y-%m-%d").date()
+            bal = self.outstanding_balance if self.outstanding_balance is not None else self.total
+            return datetime.utcnow().date() > due and bal > 0
+        except Exception:
+            return False
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert invoice to dictionary for MongoDB storage."""
         data = {
@@ -129,6 +145,7 @@ class Invoice:
             "storage_key": self.storage_key,
             "original_filename": self.original_filename,
             "validation": self.validation,
+            "is_overdue": self.is_overdue,
             "raw_text": self.raw_text,
             "confidence": self.confidence,
             "line_items": self.line_items,
@@ -171,6 +188,7 @@ class Invoice:
             "storage_key": self.storage_key,
             "original_filename": self.original_filename,
             "validation": self.validation,
+            "is_overdue": self.is_overdue,
             "confidence": self.confidence,
             "line_items": self.line_items,
             "approval_chain": self.approval_chain,
@@ -224,22 +242,25 @@ class Invoice:
     def can_transition_to(self, new_status: str) -> bool:
         """Check if transition to new status is valid in the workflow state machine."""
         valid_transitions = {
-            InvoiceStatus.DRAFT: [InvoiceStatus.SUBMITTED, InvoiceStatus.CANCELLED],
+            InvoiceStatus.DRAFT: [InvoiceStatus.SUBMITTED, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.CANCELLED],
             InvoiceStatus.PENDING: [
                 InvoiceStatus.PENDING_APPROVAL,
                 InvoiceStatus.APPROVED,
                 InvoiceStatus.REJECTED,
+                InvoiceStatus.NEEDS_REVISION,
                 InvoiceStatus.CANCELLED
             ],
             InvoiceStatus.SUBMITTED: [
                 InvoiceStatus.PENDING_APPROVAL,
                 InvoiceStatus.APPROVED,
                 InvoiceStatus.REJECTED,
+                InvoiceStatus.NEEDS_REVISION,
                 InvoiceStatus.CANCELLED
             ],
             InvoiceStatus.PENDING_APPROVAL: [
                 InvoiceStatus.APPROVED,
                 InvoiceStatus.REJECTED,
+                InvoiceStatus.NEEDS_REVISION,
                 InvoiceStatus.SUBMITTED,
                 InvoiceStatus.CANCELLED
             ],
@@ -250,6 +271,12 @@ class Invoice:
             ],
             InvoiceStatus.REJECTED: [
                 InvoiceStatus.SUBMITTED,
+                InvoiceStatus.PENDING_APPROVAL,
+                InvoiceStatus.CANCELLED
+            ],
+            InvoiceStatus.NEEDS_REVISION: [
+                InvoiceStatus.SUBMITTED,
+                InvoiceStatus.PENDING_APPROVAL,
                 InvoiceStatus.CANCELLED
             ],
             InvoiceStatus.PARTIALLY_PAID: [
@@ -267,7 +294,7 @@ class Invoice:
 
     def is_editable(self) -> bool:
         """Check if invoice can be edited."""
-        return self.status in [InvoiceStatus.DRAFT, InvoiceStatus.SUBMITTED, InvoiceStatus.REJECTED]
+        return self.status in [InvoiceStatus.DRAFT, InvoiceStatus.SUBMITTED, InvoiceStatus.REJECTED, InvoiceStatus.NEEDS_REVISION]
 
     def is_pending(self) -> bool:
         """Check if invoice is pending approval."""
@@ -297,5 +324,17 @@ class Invoice:
         return []
 
     def has_approver_acted(self, approver_id: str) -> bool:
-        """Check if a specific approver has already acted."""
-        return any(str(a["approver_id"]) == str(approver_id) for a in self.approval_chain)
+        """Check if a specific approver has already acted in the current approval round."""
+        last_submit_time = None
+        for a in reversed(self.approval_chain):
+            if a.get("status") in [InvoiceStatus.SUBMITTED, InvoiceStatus.PENDING_APPROVAL]:
+                last_submit_time = a.get("timestamp")
+                break
+
+        for a in self.approval_chain:
+            if a.get("status") in [InvoiceStatus.APPROVED, InvoiceStatus.REJECTED]:
+                if str(a.get("approver_id")) == str(approver_id):
+                    t = a.get("timestamp")
+                    if not last_submit_time or (t and t >= last_submit_time):
+                        return True
+        return False

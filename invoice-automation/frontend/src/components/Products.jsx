@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Plus, Search, Edit2, Trash2, X, Tag, DollarSign, Percent, AlertCircle } from 'lucide-react';
 import { getProducts, createProduct, updateProduct, deleteProduct } from '../services/api';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -135,7 +135,7 @@ export default function Products() {
   const [modal, setModal] = useState(null);
   const [error, setError] = useState('');
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const data = await getProducts({ search });
@@ -147,14 +147,14 @@ export default function Products() {
     } finally { 
       setLoading(false); 
     }
-  };
+  }, [search]);
 
   useEffect(() => {
     const delayDebounce = setTimeout(() => {
       load();
     }, 300);
     return () => clearTimeout(delayDebounce);
-  }, [search]);
+  }, [load]);
 
   const handleCreate = async (form) => {
     setSaving(true);
@@ -190,7 +190,7 @@ export default function Products() {
       await deleteProduct(id);
       addToast(`"${name}" removed from catalog.`, 'info');
       load(); 
-    } catch (err) { 
+    } catch { 
       addToast('Failed to deactivate product item.', 'error');
     }
   };

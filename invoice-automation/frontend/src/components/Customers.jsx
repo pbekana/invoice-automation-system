@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Users, Plus, Search, Edit2, Trash2, X, Check, Mail, Phone, MapPin, DollarSign, Calendar, AlertCircle } from 'lucide-react';
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../services/api';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -163,7 +163,7 @@ export default function Customers() {
   const [modal, setModal] = useState(null); // null | 'create' | { ...customer }
   const [error, setError] = useState('');
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const data = await getCustomers({ search });
@@ -175,14 +175,14 @@ export default function Customers() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [search]);
 
   useEffect(() => {
     const delayDebounce = setTimeout(() => {
       load();
     }, 300);
     return () => clearTimeout(delayDebounce);
-  }, [search]);
+  }, [load]);
 
   const handleCreate = async (form) => {
     setSaving(true);
@@ -214,7 +214,7 @@ export default function Customers() {
       await deleteCustomer(id);
       addToast(`"${name}" has been deactivated.`, 'info');
       load();
-    } catch (err) { 
+    } catch { 
       addToast('Failed to deactivate customer account.', 'error');
     }
   };

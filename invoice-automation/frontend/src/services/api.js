@@ -62,21 +62,51 @@ export const logoutUser = () => {
   localStorage.removeItem('user');
 };
 
-// ─── AP (Accounts Payable / legacy) ──────────────────────────────────────────
+// ─── AP (Accounts Payable) ────────────────────────────────────────────────────
 export const uploadInvoice = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
   const res = await api.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
   return res.data;
 };
-export const getInvoices = async () => { const res = await api.get('/invoices'); return res.data; };
+export const getInvoices = async (params = {}) => { const res = await api.get('/invoices', { params }); return res.data; };
 export const getDashboardData = async () => { const res = await api.get('/dashboard'); return res.data; };
 export const sendMessage = async (message) => { const res = await api.post('/chat', { message }); return res.data; };
 export const getVendors = async (params = {}) => { const res = await api.get('/api/vendors', { params }); return res.data; };
+export const createVendor = async (data) => { const res = await api.post('/api/vendors', data); return res.data; };
 export const getPendingApprovals = async () => { const res = await api.get('/api/invoices/pending-approvals'); return res.data; };
 export const approveInvoice = async (id, comments = '') => { const res = await api.post(`/api/invoices/${id}/approve`, { comments }); return res.data; };
 export const rejectInvoice = async (id, reason) => { const res = await api.post(`/api/invoices/${id}/reject`, { reason }); return res.data; };
+export const requestRevision = async (id, reason) => { const res = await api.post(`/api/invoices/${id}/request-revision`, { reason }); return res.data; };
 export const submitInvoice = async (id) => { const res = await api.post(`/api/invoices/${id}/submit`); return res.data; };
+
+// ─── Payment Tracking ─────────────────────────────────────────────────────────
+export const recordInvoicePayment = async (id, paymentData) => {
+  const res = await api.post(`/api/invoices/${id}/payments`, paymentData);
+  return res.data;
+};
+export const getInvoicePayments = async (id, type = 'payable') => {
+  const res = await api.get(`/api/invoices/${id}/payments`, { params: { type } });
+  return res.data;
+};
+export const reversePayment = async (paymentId, reason) => {
+  const res = await api.post(`/api/payments/${paymentId}/reverse`, { reason });
+  return res.data;
+};
+
+// ─── Purchase Orders & Matching ───────────────────────────────────────────────
+export const getPurchaseOrders = async (params = {}) => {
+  const res = await api.get('/api/purchase-orders', { params });
+  return res.data;
+};
+export const createPurchaseOrder = async (data) => {
+  const res = await api.post('/api/purchase-orders', data);
+  return res.data;
+};
+export const matchPO = async (invoiceId, poNumber) => {
+  const res = await api.post(`/api/invoices/${invoiceId}/match-po`, { po_number: poNumber });
+  return res.data;
+};
 
 // ─── Customers ────────────────────────────────────────────────────────────────
 export const getCustomers = async (params = {}) => { const res = await api.get('/api/customers', { params }); return res.data; };
@@ -103,5 +133,23 @@ export const createARInvoice = async (data) => { const res = await api.post('/ap
 export const updateARInvoice = async (id, data) => { const res = await api.patch(`/api/ar/invoices/${id}`, data); return res.data; };
 export const sendARInvoice = async (id) => { const res = await api.post(`/api/ar/invoices/${id}/send`); return res.data; };
 export const markARInvoicePaid = async (id, data = {}) => { const res = await api.post(`/api/ar/invoices/${id}/paid`, data); return res.data; };
+
+// ─── Reconciliation & Exports ─────────────────────────────────────────────────
+export const uploadReconciliationStatement = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await api.post('/api/reconciliation/statement', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  });
+  return res.data;
+};
+export const getReconciliationBatches = async () => {
+  const res = await api.get('/api/reconciliation/batches');
+  return res.data;
+};
+export const getReconciliationBatch = async (batchId) => {
+  const res = await api.get(`/api/reconciliation/batches/${batchId}`);
+  return res.data;
+};
 
 export default api;

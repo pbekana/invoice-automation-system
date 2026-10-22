@@ -7,6 +7,8 @@ import Register from './components/Register';
 import Invoices from './components/Invoices';
 import Approvals from './components/Approvals';
 import Vendors from './components/Vendors';
+import PurchaseOrders from './components/PurchaseOrders';
+import Reconciliation from './components/Reconciliation';
 import Chatbot from './components/Chatbot';
 import Customers from './components/Customers';
 import Products from './components/Products';
@@ -36,13 +38,15 @@ function App() {
           {/* Accounts Payable */}
           <Route path="ap/invoices" element={<Invoices refreshTrigger={0} />} />
           <Route path="ap/approvals" element={<Approvals />} />
+          <Route path="ap/purchase-orders" element={<PurchaseOrders />} />
           <Route path="ap/vendors" element={<Vendors />} />
 
           {/* Accounts Receivable */}
           <Route path="ar/invoices" element={<ARInvoices />} />
           <Route path="ar/invoices/new" element={<InvoiceBuilder />} />
 
-          {/* Core entities */}
+          {/* Financial Records & Reconciliation */}
+          <Route path="accounting/reconciliation" element={<Reconciliation />} />
           <Route path="customers" element={<Customers />} />
           <Route path="products" element={<Products />} />
 

@@ -29,11 +29,22 @@ class ARService:
     def _ensure_indexes(self):
         if self.ar_collection is not None:
             try:
-                self.ar_collection.create_index(
-                    [("invoice_number", 1)],
-                    unique=True,
-                    partialFilterExpression={"invoice_number": {"$type": "string"}}
-                )
+                try:
+                    self.ar_collection.create_index(
+                        [("invoice_number", 1)],
+                        unique=True,
+                        partialFilterExpression={"invoice_number": {"$type": "string"}}
+                    )
+                except Exception as ex:
+                    if "IndexKeySpecsConflict" in str(ex) or "already exists" in str(ex):
+                        self.ar_collection.drop_index("invoice_number_1")
+                        self.ar_collection.create_index(
+                            [("invoice_number", 1)],
+                            unique=True,
+                            partialFilterExpression={"invoice_number": {"$type": "string"}}
+                        )
+                    else:
+                        raise
                 self.ar_collection.create_index([("customer_id", 1)])
                 self.ar_collection.create_index([("status", 1)])
                 self.ar_collection.create_index([("due_date", 1)])

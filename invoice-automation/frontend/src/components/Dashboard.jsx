@@ -116,8 +116,6 @@ const Dashboard = ({ refreshTrigger }) => {
   // AR Metrics
   const totalARAmount = arInvoices.reduce((sum, inv) => sum + (inv.total || inv.grand_total || 0), 0);
   const totalARCount = arInvoices.length;
-  const arPaidCount = arInvoices.filter(inv => inv.status === 'paid').length;
-  const arUnpaidCount = arInvoices.filter(inv => inv.status !== 'paid').length;
 
   // Net Cashflow
   const netCashflow = totalARAmount - totalAPAmount;

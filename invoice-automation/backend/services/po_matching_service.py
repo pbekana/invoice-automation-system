@@ -163,10 +163,13 @@ class POMatchingService:
                             f"Invoiced quantity ({inv_qty}) exceeds goods received quantity ({qty_received})"
                         )
 
+        has_goods_receipt = any('quantity_received' in p_item for p_item in (po_items or []))
+        matching_type = 'three_way' if has_goods_receipt else 'two_way'
         is_matched = len(discrepancies) == 0
 
         return {
             "matched": is_matched,
+            "matching_type": matching_type,
             "has_po": True,
             "po_number": target_po_number,
             "match_status": "matched" if is_matched else "discrepancy_exception",

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { FileText, Plus, Search, Eye, Send, Check, X, Filter, DollarSign, Clock, CheckCircle2, ChevronRight, AlertCircle, RefreshCw } from 'lucide-react';
 import { getARInvoices, sendARInvoice, markARInvoicePaid } from '../services/api';
 import { useNavigate } from 'react-router-dom';
@@ -25,14 +25,13 @@ export default function ARInvoices() {
   const navigate = useNavigate();
   const addToast = useToastStore(state => state.addToast);
   const [invoices, setInvoices] = useState([]);
-  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [error, setError] = useState('');
   const [updatingId, setUpdatingId] = useState(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -41,21 +40,20 @@ export default function ARInvoices() {
       if (statusFilter) params.status = statusFilter;
       const data = await getARInvoices(params);
       setInvoices(data.invoices || []);
-      setTotalCount(data.total || 0);
     } catch (err) { 
       console.error(err);
       setError('Failed to fetch Accounts Receivable invoices from server.'); 
     } finally { 
       setLoading(false); 
     }
-  };
+  }, [search, statusFilter]);
 
   useEffect(() => {
     const delayDebounce = setTimeout(() => {
       load();
     }, 300);
     return () => clearTimeout(delayDebounce);
-  }, [search, statusFilter]);
+  }, [load]);
 
   const handleSend = async (id) => {
     if (!window.confirm('Are you sure you want to mark this invoice as sent?')) return;
@@ -64,7 +62,7 @@ export default function ARInvoices() {
       await sendARInvoice(id);
       addToast('Invoice marked as sent.', 'success');
       load(); 
-    } catch (err) { 
+    } catch { 
       addToast('Failed to update invoice status to sent.', 'error');
     } finally {
       setUpdatingId(null);
@@ -78,7 +76,7 @@ export default function ARInvoices() {
       await markARInvoicePaid(id);
       addToast('Payment recorded. Invoice marked as paid.', 'success');
       load(); 
-    } catch (err) { 
+    } catch { 
       addToast('Failed to record payment on the invoice.', 'error');
     } finally {
       setUpdatingId(null);

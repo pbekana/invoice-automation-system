@@ -30,11 +30,22 @@ class PaymentService:
         if self.payments_collection is not None:
             try:
                 self.payments_collection.create_index([("invoice_id", 1)])
-                self.payments_collection.create_index(
-                    [("idempotency_key", 1)],
-                    unique=True,
-                    partialFilterExpression={"idempotency_key": {"$type": "string"}}
-                )
+                try:
+                    self.payments_collection.create_index(
+                        [("idempotency_key", 1)],
+                        unique=True,
+                        partialFilterExpression={"idempotency_key": {"$type": "string"}}
+                    )
+                except Exception as ex:
+                    if "IndexKeySpecsConflict" in str(ex) or "already exists" in str(ex):
+                        self.payments_collection.drop_index("idempotency_key_1")
+                        self.payments_collection.create_index(
+                            [("idempotency_key", 1)],
+                            unique=True,
+                            partialFilterExpression={"idempotency_key": {"$type": "string"}}
+                        )
+                    else:
+                        raise
                 self.payments_collection.create_index([("status", 1)])
                 self.payments_collection.create_index([("created_at", -1)])
             except Exception as e:

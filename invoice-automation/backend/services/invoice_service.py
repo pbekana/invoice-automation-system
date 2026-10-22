@@ -275,6 +275,30 @@ class InvoiceService:
             comments or "Approved"
         )
 
+    def request_revision(
+        self,
+        invoice_id: str,
+        approver_id: str,
+        reason: str
+    ) -> Tuple[bool, Optional[str]]:
+        """Request revision/correction on an invoice with feedback for submitter."""
+        if not reason or not reason.strip():
+            return False, "Revision notes / feedback are required"
+
+        invoice = self.get_invoice_by_id(invoice_id)
+        if not invoice:
+            return False, "Invoice not found"
+
+        if invoice.has_approver_acted(approver_id):
+            return False, "You have already acted on this invoice"
+
+        return self.change_status(
+            invoice_id,
+            InvoiceStatus.NEEDS_REVISION,
+            approver_id,
+            f"Needs Revision: {reason.strip()}"
+        )
+
     def reject_invoice(
         self,
         invoice_id: str,
